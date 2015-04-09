@@ -16,6 +16,7 @@
 #define RTOL        RCONST(1.e-5)  /* Relative tolerance                */
 #define ATOL        RCONST(1.e-5)  /* Absolute tolerance                */
 #define ZERO        RCONST(0.)
+#define ONE         RCONST(1.0)
 
 //Declare prototypes of all functions defined in this file
 
@@ -29,7 +30,7 @@ static int res_basic(realtype tt, N_Vector cc, N_Vector cp, N_Vector resval, voi
 int main(void)
 {
 //Declare any necessary local constants
-N_Vector cc,cp;
+N_Vector cc,cp,id;
 long int mu,ml,iter;
 void *mem;
 realtype rtol, atol, t0, tout,tret,incr;
@@ -43,6 +44,8 @@ int iout,retval;
   cp  = N_VNew_Serial(N);
   if(check_flag((void *)cp, "N_VNew_Serial", 0)) return(1);
   
+  id  = N_VNew_Serial(NEQ);
+  if(check_flag((void *)id, "N_VNew_Serial", 0)) return(1);
 
   SetInitialProfiles(cc,cp);  
   
@@ -59,6 +62,9 @@ int iout,retval;
   mem = IDACreate();
   if(check_flag((void *)mem, "IDACreate", 0)) return(1);
 
+  retval = IDASetId(mem, id);
+  if(check_flag(&retval, "IDASetId", 1)) return(1);
+
   retval = IDAInit(mem, res_basic, t0, cc, cp);
   if(check_flag(&retval, "IDAInit", 1)) return(1);
 
@@ -71,6 +77,11 @@ int iout,retval;
   ml = 1;
   retval = IDABand(mem, N, mu, ml);
   if(check_flag(&retval, "IDABand", 1)) return(1);
+
+  /* Call IDACalcIC (with default options) to correct the initial values. */
+
+  retval = IDACalcIC(mem, IDA_YA_YDP_INIT, tout);
+  if(check_flag(&retval, "IDACalcIC", 1)) return(1);
   
   for (iout = 1; iout <= iter; iout++) {
     
@@ -94,15 +105,18 @@ int iout,retval;
 
 static void SetInitialProfiles(N_Vector cc,N_Vector cp)
 {
-    realtype *ccv,*cpv;
+    realtype *ccv,*cpv,*idv;
     int i;
     ccv = NV_DATA_S(cc);
     cpv = NV_DATA_S(cp);
+    idv = NV_DATA_S(id);
     for (i=0; i<N; i++){
          ccv[i]=0;
 	 cpv[i]=0;
+         idv[i]= ONE;
     }
-
+    idv[0]=ZERO;
+    idv[N-1]=ONE;
 
 }
 
