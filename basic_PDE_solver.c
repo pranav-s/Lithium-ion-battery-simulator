@@ -24,15 +24,15 @@
 
 
 static int check_flag(void *flagvalue, char *funcname, int opt);
-static void SetInitialProfiles(N_Vector cc,N_Vector cp,N_Vector id);
+static void SetInitialProfiles(N_Vector cc,N_Vector cp,N_Vector id, N_Vector res);
 static void PrintOutput(void *mem, N_Vector c, realtype t);
-static int res_basic(realtype tt, N_Vector cc, N_Vector cp, N_Vector resval, void *user_data);
+static int res_basic(realtype tt, N_Vector cc, N_Vector cp, N_Vector resval);
 
 
 int main()
 {
 //Declare any necessary local constants
-N_Vector cc,cp,id;
+N_Vector cc,cp,id,res;
 long int mu,ml,iter;
 void *mem;
 realtype rtol, atol, t0, tout,tret,incr, *ccp;
@@ -48,16 +48,19 @@ int iout,retval;
   
   id  = N_VNew_Serial(N);
   if(check_flag((void *)id, "N_VNew_Serial", 0)) return(1);
-
-  SetInitialProfiles(cc,cp,id);  
+  
+  res = N_VNew_Serial(N);
+  if(check_flag((void *)res, "N_VNew_Serial", 0)) return(1);
+  
+  SetInitialProfiles(cc,cp,id,res);  
   
   
   t0 = ZERO;
   rtol = RTOL; 
   atol = ATOL;
   iter= 10;
-  incr= RCONST(0.01);
-  tout= RCONST(0.001);
+  incr= RCONST(0.1);
+  tout= RCONST(0.01);
 
 /* Call IDACreate and IDAMalloc to initialize IDA. */
   
@@ -109,39 +112,49 @@ int iout,retval;
   return(0);
 }
 
-static void SetInitialProfiles(N_Vector cc,N_Vector cp, N_Vector id)
+static void SetInitialProfiles(N_Vector cc,N_Vector cp, N_Vector id, N_Vector res)
 {
-    realtype *ccv,*cpv,*idv;
+    realtype *ccv,*cpv,*idv,xfact;
     int i;
     ccv = NV_DATA_S(cc);
     cpv = NV_DATA_S(cp);
     idv = NV_DATA_S(id);
+    
+    N_VConst(ZERO, cp);
+    N_VConst(ONE, id);
+    
     for (i=0; i<N; i++){
-         ccv[i]=ZERO;
-	 cpv[i]=ZERO;
-         idv[i]= ONE;
+         xfact = (ONE/(N-ONE)) * i;  
+         ccv[i]=RCONST(16.0) * xfact * (ONE - xfact);;
     }
+    res_basic(ZERO, cc, cp, res);
+    N_VScale(-ONE, res, cp);
+    
+    cpv[0]=ZERO;
+    cpv[N-1]=ZERO;
     idv[0]=ZERO;
     idv[N-1]=ZERO;
-
+    
 }
 
 
-static int res_basic(realtype tt, N_Vector cc, N_Vector cp, N_Vector resval, void *user_data)
+static int res_basic(realtype tt, N_Vector cc, N_Vector cp, N_Vector resval)
 {   
     realtype *ccv,*cpv,*res;
     int i;
+    N_VScale(ONE, cc, resval);
     ccv = NV_DATA_S(cc);
     cpv = NV_DATA_S(cp);
     res = NV_DATA_S(resval);
     //res[0]=ccv[0]-ZERO;
     //res[N-1]=ccv[N-1]-ZERO;
-    N_VScale(ONE, cc, resval);
+    
     for (i=1; i<N-1;i++)
      {
         res[i]=cpv[i]-alpha*inv*(ccv[i+1]+ccv[i-1]-RCONST(2.0)*ccv[i]);
         
       }
+return 0;
 
 }
 
@@ -151,11 +164,11 @@ static void PrintOutput(void *mem, N_Vector c, realtype t)
       realtype *conc;
       int i;
       conc = NV_DATA_S(c);
-      printf("Output at time %8.2Le",t);
+      printf("Output at time %3.2f",t);
       printf("\n");
       for (i=0;i<N;i++){
           
-          printf("%12.4le",conc[i]);
+          printf("%4.6F",conc[i]);
           printf("\n");  
       }
       printf("\n\n\n\n\n\n");

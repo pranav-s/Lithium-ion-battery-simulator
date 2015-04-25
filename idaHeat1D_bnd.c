@@ -53,7 +53,6 @@
 /* Type: UserData */
 
 typedef struct {
-  long int mm;
   realtype dx;
   realtype coeff;
 } *User_Data;
@@ -105,7 +104,6 @@ int main(void)
   /* Create and load problem data block. */
   data = (User_Data) malloc(sizeof *data);
   if(check_flag((void *)data, "malloc", 2)) return(1);
-  data->mm = MGRID;
   data->dx = ONE/(MGRID - ONE);
   data->coeff = ONE/( (data->dx) );//Change
 
@@ -203,14 +201,13 @@ int main(void)
 int heatres(realtype tres, N_Vector uu, N_Vector up, N_Vector resval, 
             void *user_data)
 {
-  long int mm, j, offset, loc;
+  long int j;
   realtype *uv, *upv, *resv, coeff,alpha;
   User_Data data;
   
   uv = NV_DATA_S(uu); upv = NV_DATA_S(up); resv = NV_DATA_S(resval);
 
   data = (User_Data)user_data;
-  mm = data->mm;
   coeff = data->coeff;
   alpha = RCONST(2.0);
 
@@ -240,8 +237,8 @@ int heatres(realtype tres, N_Vector uu, N_Vector up, N_Vector resval,
 static int SetInitialProfile(User_Data data, N_Vector uu, N_Vector up, 
                              N_Vector id, N_Vector res)
 {
-  realtype xfact, yfact, *udata, *updata, *iddata;
-  long int mm, mm1, i, j, offset, loc;
+  realtype xfact, *udata, *updata, *iddata;
+  long int i;
   
   udata = NV_DATA_S(uu);
   updata = NV_DATA_S(up);
