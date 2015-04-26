@@ -1,0 +1,550 @@
+/*
+ * -----------------------------------------------------------------
+ * $Date: 2015-04-26$
+ * -----------------------------------------------------------------
+ * Programmer(s): Pranav Shetty
+ *              
+ * -----------------------------------------------------------------
+ * Example problem towards building a full fledged LiB solver: A half cell solver.
+ *
+ * This example solves a set of 5 PDE's to obtain the relevant parameters of a half cell.
+ * This version uses the band solver IDABand, and IDACalcIC.
+ * y & yp denote the set of variables and its derivaive respectively. A generic label y has been chosen in order to remain
+ * consistent with ida's documentation and also because the  encompasses 5 different variables
+ *
+ *
+ * The system is solved with IDA using the banded linear system
+ * solver, half-bandwidths equal to 1, and default
+ * difference-quotient Jacobian.
+ * IDACalcIC is called to compute correct values at the boundary,
+ * given incorrect values as input initial guesses. The constraints
+ * u >= 0 are posed for some components.
+ * -----------------------------------------------------------------
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#include <ida/ida.h>
+#include <ida/ida_band.h>
+#include <nvector/nvector_serial.h>
+#include <sundials/sundials_types.h>
+
+/* Problem Constants */
+
+#define GRID        100
+#define N_VAR       5    
+#define N           GRID*N_VAR 
+#define ZERO        RCONST(0.0)
+#define ONE         RCONST(1.0)
+#define T_PLUS      RCONST(0.363)
+#define R           RCONST(8.314)
+#define T           RCONST(298.15)
+#define F           RCONST(96487.0)
+#define BRUGG       RCONST(4.0)  //confirm if this is always constant
+#define I           RCONST(2.0)
+
+//Problem constants defined in preprocessor in this file. Need to keep all problem constants in a unique location in the next version
+
+/* Type: UserData */
+
+typedef struct {
+  realtype dx;
+  realtype coeff;
+  realtype eps;
+  realtype sigma;
+  realtype diff_coeff;
+  realtype radius;
+  realtype k;
+  realtype c_s_max;
+  realtype c_s_0;
+  realtype c_0;
+  realtype l;
+  realtype interfac_area;
+  realtype sigma_eff;
+  realtype diff_coeff_eff;
+} *Material_Data;
+
+/* Prototypes of functions called by IDA */
+
+int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, void *user_data);
+static void InitAnodeData(Material_Data data_anode);
+static void InitSepData(Material_Data data_sep);
+static void InitCathodeData(Material_Data data_cathode);
+/* Prototypes of private functions */
+
+//static void PrintHeader(realtype rtol, realtype atol);
+//static void PrintOutput(void *mem, realtype t, N_Vector u);
+static int SetInitialProfile(Material_Data data, N_Vector y, N_Vector yp, 
+                             N_Vector id, N_Vector res);
+
+static int check_flag(void *flagvalue, char *funcname, int opt);
+
+/*
+ *--------------------------------------------------------------------
+ * MAIN PROGRAM
+ *--------------------------------------------------------------------
+ */
+
+int main(void)
+{
+  void *mem;
+  Material_Data data_anode,data_cathode,data_sep;
+  N_Vector y, yp, constraints, id, res;
+  int ier, iout;
+  long int mu, ml, netf, ncfn;
+  realtype rtol, atol, t0, t1, tout, tret;
+  mem = NULL;
+  data_anode = data_cathode = data_sep = NULL;
+  y = yp = constraints = id = res = NULL;
+
+  /* Create vectors y, yp, res, constraints, id. */
+  y = N_VNew_Serial(N);
+  if(check_flag((void *)y, "N_VNew_Serial", 0)){
+    return(1);
+  }
+  
+  yp = N_VNew_Serial(N);
+  if(check_flag((void *)yp, "N_VNew_Serial", 0)) 
+    return(1);
+  }
+  
+  res = N_VNew_Serial(N);
+  if(check_flag((void *)res, "N_VNew_Serial", 0)){
+    return(1);
+  }
+  
+  constraints = N_VNew_Serial(N);
+  if(check_flag((void *)constraints, "N_VNew_Serial", 0)){
+    return(1);
+  }
+  
+  id = N_VNew_Serial(N);
+  if(check_flag((void *)id, "N_VNew_Serial", 0)){
+    return(1);
+  }
+  
+/* Create and load problem data block. */ 
+  data = (Material_Data) malloc(sizeof *data);
+  if(check_flag((void *)data, "malloc", 2)){
+    return(1);
+  }
+  
+  //data->dx = ONE/(GRID - ONE);
+  //data->coeff = ONE/( (data->dx) );
+  InitAnodeData(data_anode);
+  InitSepData(data_sep);
+  InitCathodeData(data_cathode);
+  //Need to initialize remaining constants by hardcoding them here. Need to take value from cffi in later iteration  
+  //Do it in a separate function
+  //Need to deal with units of all constants
+
+  /* Initialize y, yp, id. */
+  SetInitialProfile(data_anode,data_sep,data_cathode, y, yp, id, res, constraints);
+
+  /* Set remaining input parameters. */
+  t0   = ZERO;
+  t1   = RCONST(0.01);
+  rtol = RCONST(1.0e-3);
+  atol = RCONST(1.0e-3);
+
+  /* Call IDACreate and IDAMalloc to initialize solution */
+  mem = IDACreate();
+  if(check_flag((void *)mem, "IDACreate", 0)){
+    return(1);
+  }
+  
+  ier = IDASetUserData(mem, data);
+  if(check_flag(&ier, "IDASetUserData", 1)){
+    return(1);
+  }
+
+  ier = IDASetId(mem, id);
+  if(check_flag(&ier, "IDASetId", 1)){ 
+    return(1);
+  }
+
+  ier = IDASetConstraints(mem, constraints);
+  if(check_flag(&ier, "IDASetConstraints", 1)){
+    return(1);
+  }
+
+  ier = IDAInit(mem, half_cell_residuals, t0, y, yp);
+  if(check_flag(&ier, "IDAInit", 1)){
+    return(1);
+  }
+
+  ier = IDASStolerances(mem, rtol, atol);
+  if(check_flag(&ier, "IDASStolerances", 1)){
+    return(1);
+  }
+  
+  /* Call IDABand to specify the linear solver. */
+  mu = 1; ml = 1; 
+  ier = IDABand(mem, N, mu, ml);
+  if(check_flag(&ier, "IDABand", 1)) return(1);
+ 
+  /* Call IDACalcIC to correct the initial values. */
+  
+  ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
+  if(check_flag(&ier, "IDACalcIC", 1)){ 
+    return(1);
+  }
+  /* Print output heading. */
+  //PrintHeader(rtol, atol);  
+  
+  //PrintOutput(mem, t0, uu); //Change
+
+
+  /* Loop over output times, call IDASolve, and print results. */
+  
+  for (tout = t1, iout = 1; iout <= NOUT; iout++, tout *= TWO) {
+    
+    ier = IDASolve(mem, tout, &tret, y, yp, IDA_NORMAL);
+    if(check_flag(&ier, "IDASolve", 1)){
+      return(1);
+    }
+    //PrintOutput(mem, tret, y);
+  
+  }
+  
+  /* Print remaining counters and free memory. 
+  ier = IDAGetNumErrTestFails(mem, &netf);
+  check_flag(&ier, "IDAGetNumErrTestFails", 1);
+  ier = IDAGetNumNonlinSolvConvFails(mem, &ncfn);
+  check_flag(&ier, "IDAGetNumNonlinSolvConvFails", 1);
+  printf("\n netf = %ld,   ncfn = %ld \n", netf, ncfn);
+  */
+  
+  IDAFree(&mem);
+  N_VDestroy_Serial(y);
+  N_VDestroy_Serial(yp);
+  N_VDestroy_Serial(id);
+  N_VDestroy_Serial(res);
+  N_VDestroy_Serial(constraints);
+  free(data);
+
+  return(0);
+}
+
+/*
+ *--------------------------------------------------------------------
+ * FUNCTIONS CALLED BY IDA
+ *--------------------------------------------------------------------
+ */
+
+/*
+ * half_cell_residuals: Lithium ion battery system residual function                       
+ * 
+ */
+
+int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, 
+                        void *user_data)
+{
+  long int j;
+  realtype *uv, *upv, *resv, coeff,alpha;
+  Material_Data data_a,data_s,data_c;
+  
+  yv = NV_DATA_S(y); 
+  ypv = NV_DATA_S(yp); 
+  resv = NV_DATA_S(resval);
+  
+  data = (Material_Data)user_data; //Could cause problems
+  coeff = data->coeff;
+
+  /* Initialize resval to uu, to take care of boundary equations. */
+  
+  
+  return(0);
+
+}
+
+/*
+ *--------------------------------------------------------------------
+ * PRIVATE FUNCTIONS
+ *--------------------------------------------------------------------
+ */
+
+/*
+ * SetInitialProfile: routine to initialize u, up, and id vectors.       
+ */
+/*y[0-(GRID-1)]       concentration
+ *y[GRID-2*GRID-1]    ph1
+ *y[2*GRID-3*GRID-1]  phi2
+ *y[3*GRID- 4*GRID-1] j
+ *y[4*GRID-5*GRID-1]  c_s
+ */
+static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,
+                             N_Vector y, N_Vector yp, N_Vector res,
+                             N_Vector id, N_Vector constraints)
+{
+  realtype *ydata, *ypdata, *iddata, coeff, sigma, l_a, l_s;
+  long int i,j;
+  int sep_indicator,cath_indicator;
+  ydata = NV_DATA_S(y);
+  ypdata = NV_DATA_S(yp);
+  iddata = NV_DATA_S(id);
+  constraintdata = NV_DATA_S(constraints);
+  
+  l_a = (data_anode->l)/(data_anode->l + data_sep->l + data_cathode->l);
+  l_s = (data_anode->l+data_sep->l)/(data_anode->l + data_sep->l + data_cathode->l);
+  
+  sep_indicator = int(l_a*GRID);
+  cath_indicator = int(l_s*GRID);
+  
+  /* Initialize y on all grid points. */ 
+  //Confirm all yp values
+  //Future refactoring: Can move all assignments to one block and pass arguments to it
+  for(i=0; i<N;i++){
+      j=i/GRID;  
+      switch(j){
+          case 0:
+                 {
+                  ydata[i]=c_0;
+                  ypdata[i]=ZERO;
+                  iddata[i]=ONE;   
+                  constraintdata[i]=ONE;
+                  break;
+                 }
+          
+          case 1:
+                 {
+                  if(i==GRID){
+                     ydata[i]=ZERO;
+                     break;
+                  }
+                  if(i%GRID>0 && i%GRID<=l_a){
+                      ydata[i]=ydata[i-1]-(data_anode->coeff)*I/(data_anode->sigma);
+                      ypdata[i]=ZERO;
+                      iddata[i]=ZERO;   
+                      constraintdata[i]=ZERO;
+                  }
+                  else if(i%GRID>l_a && i%GRID<=l_s){
+                      ydata[i]=ydata[i-1]-(data_sep->coeff)*I/(data_sep->sigma);
+                      ypdata[i]=ZERO;
+                      iddata[i]=ZERO;   
+                      constraintdata[i]=ZERO;
+                  }
+                  else{
+                      ydata[i]=ydata[i-1]-(data_cathode->coeff)*I/(data_cathode->sigma);
+                      ypdata[i]=ZERO;
+                      iddata[i]=ZERO;   
+                      constraintdata[i]=ZERO;
+                  }
+                  
+
+                  break;
+                 }
+          
+          case 2:
+                 {
+                  ydata[i]=ZERO;
+                  ypdata[i]=ZERO;
+                  iddata[i]=ZERO;   
+                  constraintdata[i]=ZERO;
+                  break;
+                 }
+          
+          case 3:
+                 {
+                  ydata[i]=ZERO;
+                  ypdata[i]=ZERO;
+                  iddata[i]=ZERO;   
+                  constraintdata[i]=ZERO;
+                  break;
+                 }  
+           
+          case 4:
+                 {
+                  if(i%GRID>0 && i%GRID<=l_a){
+                      ydata[i]=data_anode->c_s_0;
+                      ypdata[i]=ZERO;
+                      iddata[i]=ONE;   
+                      constraintdata[i]=ONE;
+                  }
+                  else if(i%GRID>l_a && i%GRID<=l_s){
+                      ydata[i]=ZERO;
+                      ypdata[i]=ZERO;
+                      iddata[i]=ONE;   
+                      constraintdata[i]=ONE;
+                  }
+                  else{
+                      ydata[i]=data_cathode->c_s_0;
+                      ypdata[i]=ZERO;
+                      iddata[i]=ONE;   
+                      constraintdata[i]=ONE;
+                  }
+ 
+                  break;
+                 }
+  
+  return(0);
+
+}
+
+static void InitAnodeData(Material_Data data_anode)
+{  
+  data_anode->dx = ONE/(GRID - ONE);
+  data_anode->coeff = ONE/(data->dx); 
+  data_anode->sigma = RCONST(100.0);
+  data_anode->eps = RCONST(0.385);
+  data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
+  data_anode->diff_coeff = RCONST(1.0e-14);
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*pow((double)(data_anode->eps),BRUGG); //may not work as pow takes double 
+  data_anode->k = RCONST(2.334e-11);
+  data_anode->c_0 = RCONST(1000.0);
+  data_anode->c_s_max = RCONST(51554.0);
+  data_anode->c_s_0 = (data_anode->c_s_max)*RCONST(0.4955);
+  data_anode->l = RCONST(80.0e-6);
+  data_anode->radius = RCONST(2.0e-6);
+  data_anode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
+}
+
+static void InitSepData(Material_Data data_sep)
+{  
+  data_anode->dx = ONE/(GRID - ONE);
+  data_anode->coeff = ONE/(data->dx); 
+  data_anode->eps = RCONST(0.724);
+  data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
+  data_anode->diff_coeff = RCONST(7.5e-10);
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*pow((double)(data_anode->eps),BRUGG); 
+  data_anode->c_0 = RCONST(1000.0);
+  data_anode->l = RCONST(25.0e-6);
+}
+
+
+static void InitCathodeData(Material_Data data_cathode)
+{  
+  data_anode->dx = ONE/(GRID - ONE);
+  data_anode->coeff = ONE/(data->dx); 
+  data_anode->sigma = RCONST(100.0);
+  data_anode->eps = RCONST(0.0326);
+  data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
+  data_anode->diff_coeff = RCONST(3.9e-14);
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*pow((double)(data_anode->eps),BRUGG); 
+  data_anode->k = RCONST(5.0307e-11);
+  data_anode->c_0 = RCONST(1000.0);
+  data_anode->c_s_max = RCONST(30555.0);
+  data_anode->c_s_0 = (data_anode->c_s_max)*RCONST(0.8551);
+  data_anode->l = RCONST(88.0e-6);
+  data_anode->radius = RCONST(2.0e-6);
+  data_anode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
+}
+
+/* 
+ * Print first lines of output (problem description)
+ 
+
+static void PrintHeader(realtype rtol, realtype atol)
+{
+  printf("\nidaHeat1D_bnd: Heat equation, serial example problem for IDA\n");
+  printf("          Discretized heat equation on 2D unit square.\n");
+  printf("          Zero boundary conditions,");
+  printf(" polynomial initial conditions.\n");
+  printf("          Mesh dimensions: %d", MGRID);
+  printf("        Total system size: %d\n\n", NEQ);
+#if defined(SUNDIALS_EXTENDED_PRECISION) 
+  printf("Tolerance parameters:  rtol = %Lg   atol = %Lg\n", rtol, atol);
+#elif defined(SUNDIALS_DOUBLE_PRECISION) 
+  printf("Tolerance parameters:  rtol = %g   atol = %g\n", rtol, atol);
+#else
+  printf("Tolerance parameters:  rtol = %g   atol = %g\n", rtol, atol);
+#endif
+  printf("Constraints set to force all solution components >= 0. \n");
+  printf("Linear solver: IDABAND, banded direct solver \n");
+  printf("       difference quotient Jacobian, half-bandwidths = %d \n",MGRID);
+#if defined(SUNDIALS_EXTENDED_PRECISION)
+  printf("IDACalcIC called with input boundary values = %Lg \n",BVAL);
+#elif defined(SUNDIALS_DOUBLE_PRECISION)
+  printf("IDACalcIC called with input boundary values = %g \n",BVAL);
+#else
+  printf("IDACalcIC called with input boundary values = %g \n",BVAL);
+#endif
+  // Print output table heading and initial line of table. 
+  printf("\n   Output Summary (umax = max-norm of solution) \n\n");
+  printf("  time       umax     k  nst  nni  nje   nre   nreLS    h      \n" );
+  printf(" .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . \n");
+}
+
+/*
+ * Print Output
+ */
+
+static void PrintOutput(void *mem, realtype t, N_Vector uu)
+{
+  int ier;
+  realtype umax, hused;
+  long int nst, nni, nje, nre, nreLS;
+  int kused;
+
+  umax = N_VMaxNorm(uu);
+  
+  ier = IDAGetLastOrder(mem, &kused);
+  check_flag(&ier, "IDAGetLastOrder", 1);
+  ier = IDAGetNumSteps(mem, &nst);
+  check_flag(&ier, "IDAGetNumSteps", 1);
+  ier = IDAGetNumNonlinSolvIters(mem, &nni);
+  check_flag(&ier, "IDAGetNumNonlinSolvIters", 1);
+  ier = IDAGetNumResEvals(mem, &nre);
+  check_flag(&ier, "IDAGetNumResEvals", 1);
+  ier = IDAGetLastStep(mem, &hused);
+  check_flag(&ier, "IDAGetLastStep", 1);
+  ier = IDADlsGetNumJacEvals(mem, &nje);
+  check_flag(&ier, "IDADlsGetNumJacEvals", 1);
+  ier = IDADlsGetNumResEvals(mem, &nreLS);
+  check_flag(&ier, "IDADlsGetNumResEvals", 1);
+
+#if defined(SUNDIALS_EXTENDED_PRECISION) 
+  printf(" %5.2Lf %13.5Le  %d  %3ld  %3ld  %3ld  %4ld  %4ld  %9.2Le \n",
+         t, umax, kused, nst, nni, nje, nre, nreLS, hused);
+#elif defined(SUNDIALS_DOUBLE_PRECISION) 
+  printf(" %5.2f %13.5e  %d  %3ld  %3ld  %3ld  %4ld  %4ld  %9.2e \n",
+         t, umax, kused, nst, nni, nje, nre, nreLS, hused);
+#else
+  printf(" %5.2f %13.5e  %d  %3ld  %3ld  %3ld  %4ld  %4ld  %9.2e \n",
+         t, umax, kused, nst, nni, nje, nre, nreLS, hused);
+#endif
+
+}
+
+
+/* 
+ * Check function return value...
+ *   opt == 0 means SUNDIALS function allocates memory so check if
+ *            returned NULL pointer
+ *   opt == 1 means SUNDIALS function returns a flag so check if
+ *            flag >= 0
+ *   opt == 2 means function allocates memory so check if returned
+ *            NULL pointer 
+ */
+
+static int check_flag(void *flagvalue, char *funcname, int opt)
+{
+  int *errflag;
+
+  /* Check if SUNDIALS function returned NULL pointer - no memory allocated */
+  if (opt == 0 && flagvalue == NULL) {
+    fprintf(stderr, 
+            "\nSUNDIALS_ERROR: %s() failed - returned NULL pointer\n\n", 
+            funcname);
+    return(1);
+  } else if (opt == 1) {
+    /* Check if flag < 0 */
+    errflag = (int *) flagvalue;
+    if (*errflag < 0) {
+      fprintf(stderr, 
+              "\nSUNDIALS_ERROR: %s() failed with flag = %d\n\n", 
+              funcname, *errflag);
+      return(1); 
+    }
+  } else if (opt == 2 && flagvalue == NULL) {
+    /* Check if function returned NULL pointer - no memory allocated */
+    fprintf(stderr, 
+            "\nMEMORY_ERROR: %s() failed - returned NULL pointer\n\n", 
+            funcname);
+    return(1);
+  }
+
+  return(0);
+}
