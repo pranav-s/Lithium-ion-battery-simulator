@@ -41,20 +41,24 @@ typedef struct {
 
 realtype ocp_anode(realtype c,realtype c_max); //Consider using std library functions
 realtype ocp_cathode(realtype c,realtype c_max);
+realtype kappa(realtype c, realtype eps);
 static void InitAnodeData(Material_Data data_anode);
 
 int main(void){
-  realtype b;
+  realtype b,l_a;
   Material_Data data_anode;
+  b = kappa(RCONST(3109),RCONST(0.385));
   data_anode=NULL;
   data_anode = (Material_Data) malloc(sizeof *data_anode);
   InitAnodeData(data_anode);
-  printf("%3.8f\n",data_anode->eps);
-  printf("%3.8f\n",data_anode->l);
-  printf("%3.8f\n",data_anode->diff_coeff_eff);
-  printf("%3.8f\n",data_anode->k);
-  printf("%3.18f\n",data_anode->radius);
-  printf("%3.8df\n",data_anode->interfac_area);
+  l_a = (data_anode->l)/(data_anode->l + data_anode->radius);
+  int i = (int)(l_a*RCONST(GRID));
+  printf("%3.8f\n",l_a*RCONST(GRID));
+  printf("%d\n",i);
+  printf("%3.8f\n",data_anode->coeff);
+  printf("%3.8f\n",T_PLUS);
+  printf("%3.8f\n",R);
+  printf("%3.8f\n",data_anode->interfac_area);
   return 0;
 
 }
@@ -75,6 +79,17 @@ static void InitAnodeData(Material_Data data_anode)
   data_anode->l = RCONST(0.00008);
   data_anode->radius = RCONST(0.000002);
   data_anode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
+}
+
+realtype kappa(realtype c, realtype eps)
+{
+    realtype exp_term, polynom_term;
+    exp_term = SUNRpowerI(eps,BRUGG);
+    polynom_term = RCONST(4.1253e-2)+RCONST(5.007e-4)*c-RCONST(4.7212e-7)*SUNRpowerI(c,2)+
+                   RCONST(1.5094)*SUNRpowerI(c,3)-RCONST(1.6018)*SUNRpowerI(c,4);
+    
+    return polynom_term*exp_term;
+  
 }
 
 realtype ocp_anode(realtype c,realtype c_max) //Consider using std library functions
