@@ -30,6 +30,7 @@
 #include <ida/ida_band.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
+#include <sundials/sundials_math.h> //Not sure if will be able to call std library functions from here
 
 /* Problem Constants */
 
@@ -66,12 +67,57 @@ typedef struct {
   realtype diff_coeff_eff;
 } *Material_Data;
 
+typedef struct {
+  realtype dx_a;
+  realtype coeff_a;
+  realtype eps_a;
+  realtype sigma_a;
+  realtype diff_coeff_a;
+  realtype radius_a;
+  realtype k_a;
+  realtype c_s_max_a;
+  realtype c_s_0_a;
+  realtype c_0_a;
+  realtype l_a;
+  realtype interfac_area_a;
+  realtype sigma_eff_a;
+  realtype diff_coeff_eff_a;
+  
+  realtype dx_s;
+  realtype coeff_s;
+  realtype eps_s;
+  realtype diff_coeff_s;
+  realtype c_0_s;
+  realtype l_s;
+  realtype diff_coeff_eff_s;
+  
+  realtype dx_c;
+  realtype coeff_c;
+  realtype eps_c;
+  realtype sigma_c;
+  realtype diff_coeff_c;
+  realtype radius_c;
+  realtype k_c;
+  realtype c_s_max_c;
+  realtype c_s_0_c;
+  realtype c_0_c;
+  realtype l_c;
+  realtype interfac_area_c;
+  realtype sigma_eff_c;
+  realtype diff_coeff_eff_c;
+} *Cell_Data;
+
 /* Prototypes of functions called by IDA */
 
 int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, void *user_data);
 static void InitAnodeData(Material_Data data_anode);
 static void InitSepData(Material_Data data_sep);
 static void InitCathodeData(Material_Data data_cathode);
+static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data);
+realtype ocp_anode(realtype c,realtype c_max);
+realtype ocp_cathode(realtype c,realtype c_max);
+
+
 /* Prototypes of private functions */
 
 //static void PrintHeader(realtype rtol, realtype atol);
@@ -80,6 +126,9 @@ static int SetInitialProfile(Material_Data data, N_Vector y, N_Vector yp,
                              N_Vector id, N_Vector res);
 
 static int check_flag(void *flagvalue, char *funcname, int opt);
+realtype kappa(realtype c, realtype eps);
+realtype U_a(realtype c_surf, realtype c_max);
+realtype U_c(realtype c_surf, realtype c_max); 
 
 /*
  *--------------------------------------------------------------------
@@ -91,12 +140,14 @@ int main(void)
 {
   void *mem;
   Material_Data data_anode,data_cathode,data_sep;
+  Cell_Data data;
   N_Vector y, yp, constraints, id, res;
   int ier, iout;
   long int mu, ml, netf, ncfn;
   realtype rtol, atol, t0, t1, tout, tret;
   mem = NULL;
   data_anode = data_cathode = data_sep = NULL;
+  data = NULL;
   y = yp = constraints = id = res = NULL;
 
   /* Create vectors y, yp, res, constraints, id. */
@@ -125,17 +176,17 @@ int main(void)
     return(1);
   }
   
-/* Create and load problem data block. */ 
-  data = (Material_Data) malloc(sizeof *data);
-  if(check_flag((void *)data, "malloc", 2)){
-    return(1);
-  }
-  
-  //data->dx = ONE/(GRID - ONE);
-  //data->coeff = ONE/( (data->dx) );
   InitAnodeData(data_anode);
   InitSepData(data_sep);
   InitCathodeData(data_cathode);
+  InitCellData(data_anode, data_sep,data_cathode,data);
+  
+/* Create and load problem data block. */ 
+  data = (Cell_Data) malloc(sizeof *data);
+  if(check_flag((void *)data, "malloc", 2)){
+    return(1);
+  }
+ 
   //Need to initialize remaining constants by hardcoding them here. Need to take value from cffi in later iteration  
   //Do it in a separate function
   //Need to deal with units of all constants
@@ -243,15 +294,14 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                         void *user_data)
 {
   long int j;
-  realtype *uv, *upv, *resv, coeff,alpha;
-  Material_Data data_a,data_s,data_c;
+  realtype *uv, *upv, *resv;
+  Cell_Data data;
   
   yv = NV_DATA_S(y); 
   ypv = NV_DATA_S(yp); 
   resv = NV_DATA_S(resval);
   
-  data = (Material_Data)user_data; //Could cause problems
-  coeff = data->coeff;
+  data = (Cell_Data)user_data;
 
   /* Initialize resval to uu, to take care of boundary equations. */
   
@@ -286,7 +336,7 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
   ypdata = NV_DATA_S(yp);
   iddata = NV_DATA_S(id);
   constraintdata = NV_DATA_S(constraints);
-  
+  c_0 = data_anode->c_0;
   l_a = (data_anode->l)/(data_anode->l + data_sep->l + data_cathode->l);
   l_s = (data_anode->l+data_sep->l)/(data_anode->l + data_sep->l + data_cathode->l);
   
@@ -296,6 +346,7 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
   /* Initialize y on all grid points. */ 
   //Confirm all yp values
   //Future refactoring: Can move all assignments to one block and pass arguments to it
+  //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later
   for(i=0; i<N;i++){
       j=i/GRID;  
       switch(j){
@@ -312,24 +363,27 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
                  {
                   if(i==GRID){
                      ydata[i]=ZERO;
-                     break;
+                     ypdata[i]=ZERO;
+                     iddata[i]=ZERO;   
+                     constraintdata[i]=ZERO;
+                     
                   }
-                  if(i%GRID>0 && i%GRID<=l_a){
+                  else if(i%GRID>0 && i%GRID<=l_a){
                       ydata[i]=ydata[i-1]-(data_anode->coeff)*I/(data_anode->sigma);
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>l_a && i%GRID<=l_s){
-                      ydata[i]=ydata[i-1]-(data_sep->coeff)*I/(data_sep->sigma);
+                      ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
-                  else{
+                  else{  //Not sure about initialization of phi1 at cathode boundary
                       ydata[i]=ydata[i-1]-(data_cathode->coeff)*I/(data_cathode->sigma);
                       ypdata[i]=ZERO;
-                      iddata[i]=ZERO;   
+                      iddata[i]=ZERO;
                       constraintdata[i]=ZERO;
                   }
                   
@@ -391,7 +445,7 @@ static void InitAnodeData(Material_Data data_anode)
   data_anode->eps = RCONST(0.385);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(1.0e-14);
-  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*pow((double)(data_anode->eps),BRUGG); //may not work as pow takes double 
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG));
   data_anode->k = RCONST(2.334e-11);
   data_anode->c_0 = RCONST(1000.0);
   data_anode->c_s_max = RCONST(51554.0);
@@ -408,7 +462,7 @@ static void InitSepData(Material_Data data_sep)
   data_anode->eps = RCONST(0.724);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(7.5e-10);
-  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*pow((double)(data_anode->eps),BRUGG); 
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG); 
   data_anode->c_0 = RCONST(1000.0);
   data_anode->l = RCONST(25.0e-6);
 }
@@ -422,7 +476,7 @@ static void InitCathodeData(Material_Data data_cathode)
   data_anode->eps = RCONST(0.0326);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(3.9e-14);
-  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*pow((double)(data_anode->eps),BRUGG); 
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG); 
   data_anode->k = RCONST(5.0307e-11);
   data_anode->c_0 = RCONST(1000.0);
   data_anode->c_s_max = RCONST(30555.0);
@@ -430,6 +484,82 @@ static void InitCathodeData(Material_Data data_cathode)
   data_anode->l = RCONST(88.0e-6);
   data_anode->radius = RCONST(2.0e-6);
   data_anode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
+}
+
+static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data)
+{
+  data->dx_a = data_anode->dx;
+  data->coeff = data_anode->coeff;
+  data->eps_a = data_anode->eps;
+  data->sigma_a = data_anode->sigma;
+  data->sigma_eff_a = data_anode->sigma_eff;
+  data->diff_coeff_a = data_anode->diff_coeff;
+  data->diff_coeff_eff_a = data_anode->diff_coeff_eff;
+  data->k_a = data_anode->k;
+  data->c_0_a = data_anode->c_0;
+  data->c_s_max_a = data_anode->c_s_max;
+  data->c_s_0_a = data_anode->c_s_0;
+  data->l_a = data_anode->l;
+  data->radius_a = data_anode->radius;
+  data->interfac_area_a = data_anode->interfac_area;
+  
+  data->dx_s = data_anode->dx;
+  data->coeff_s = data_anode->coeff;
+  data->eps_s = data_anode->eps;
+  data->diff_coeff_s = data_anode->diff_coeff;
+  data->diff_coeff_eff_s = data_anode->diff_coeff_eff;
+  data->c_0_s = data_anode->c_0;
+  data->l_s = data_anode->l;
+  
+  data->dx_c = data_anode->dx;
+  data->coeff_c = data_anode->coeff;
+  data->eps_c = data_anode->eps;
+  data->sigma_c = data_anode->sigma;
+  data->sigma_eff_c = data_anode->sigma_eff;
+  data->diff_coeff_eff_c = data_anode->diff_coeff;
+  data->diff_coeff_c = data_anode->diff_coeff_eff;
+  data->k_c = data_anode->k;
+  data->c_0_c = data_anode->c_0;
+  data->c_s_max_c = data_anode->c_s_max;
+  data->c_s_0_c = data_anode->c_s_0;
+  data->l_c = data_anode->l;
+  data->radius_c = data_anode->radius;
+  data->interfac_area_c = data_anode->interfac_area;
+}
+
+realtype kappa(realtype c, realtype eps)
+{
+    realtype exp_term, polynom_term;
+    exp_term = SUNRpowerI(eps,BRUGG);
+    polynom_term = RCONST(4.1253e-2)+RCONST(5.007e-4)*c-RCONST(4.7212e-7)*RPowerI(c,2)+
+                   RCONST(1.5094)*SUNRpowerI(c,3)-RCONST(1.6018)*SUNRpowerI(c,4);
+    
+    return polynom_term*exp_term;
+  
+}
+
+realtype ocp_anode(realtype c,realtype c_max) //Consider using std library functions
+{
+  realtype soc = c/c_max;
+  realtype numer,denom;
+  numer = -RCONST(4.656)+RCONST(88.669)*SUNRpowerI(soc,2)-RCONST(401.119)*SUNRpowerI(soc,4)+
+           RCONST(342.909)*SUNRpowerI(c,6)-RCONST(462.471)*SUNRpowerI(c,8)+RCONST(433.434)*SUNRpowerI(c,10);
+  
+  denom = -RCONST(1.0)+RCONST(18.933)*SUNRpowerI(soc,2)-RCONST(79.532)*SUNRpowerI(soc,4)+
+           RCONST(37.311)*SUNRpowerI(c,6)-RCONST(73.083)*SUNRpowerI(c,8)+RCONST(95.96)*SUNRpowerI(c,10);
+           
+  return (numer/denom);
+}
+
+realtype ocp_cathode(realtype c,realtype c_max)
+{
+  realtype soc = c/c_max;
+  realtype expr;
+  expr = RCONST(0.7222)+RCONST(0.1387)*soc+RCONST(0.029)*SUNRpowerR(soc,RCONST(0.5))-
+          RCONST(0.0172)/soc+RCONST(0.0019)*SUNRpowerR(soc,RCONST(-1.5))+
+          RCONST(0.2808)*SUNRpowerR(RCONST(10.0),RCONST(0.90)-RCONST(15.0)*soc)-
+          RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
+  return expr;
 }
 
 /* 
@@ -470,7 +600,7 @@ static void PrintHeader(realtype rtol, realtype atol)
 /*
  * Print Output
  */
-
+/*
 static void PrintOutput(void *mem, realtype t, N_Vector uu)
 {
   int ier;
@@ -508,7 +638,7 @@ static void PrintOutput(void *mem, realtype t, N_Vector uu)
 
 }
 
-
+ */
 /* 
  * Check function return value...
  *   opt == 0 means SUNDIALS function allocates memory so check if
