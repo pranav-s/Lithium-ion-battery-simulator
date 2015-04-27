@@ -45,11 +45,12 @@
 #define F           RCONST(96487.0)
 #define BRUGG       RCONST(4.0)  //confirm if this is always constant
 #define I           RCONST(2.0)
+#define SUNDIALS EXTENDED PRECISION 1
 
 //Problem constants defined in preprocessor in this file. Need to keep all problem constants in a unique location in the next version
 
 /* Type: UserData */
-
+//Look at struct brackets again
 typedef struct {
   realtype dx;
   realtype coeff;
@@ -122,8 +123,8 @@ realtype ocp_cathode(realtype c,realtype c_max);
 
 //static void PrintHeader(realtype rtol, realtype atol);
 //static void PrintOutput(void *mem, realtype t, N_Vector u);
-static int SetInitialProfile(Material_Data data, N_Vector y, N_Vector yp, 
-                             N_Vector id, N_Vector res);
+static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode, N_Vector y,
+                             N_Vector yp, N_Vector id, N_Vector res, N_Vector constraints);
 
 static int check_flag(void *flagvalue, char *funcname, int opt);
 realtype kappa(realtype c, realtype eps);
@@ -149,7 +150,33 @@ int main(void)
   data_anode = data_cathode = data_sep = NULL;
   data = NULL;
   y = yp = constraints = id = res = NULL;
+  
+  data_anode = (Material_Data) malloc(sizeof *data_anode);
+  if(check_flag((void *)data_anode, "malloc", 2)){
+    return(1);
+  }
+  
+  data_sep = (Material_Data) malloc(sizeof *data_sep);
+  if(check_flag((void *)data_sep, "malloc", 2)){
+    return(1);
+  }
+  
+  data_cathode = (Material_Data) malloc(sizeof *data_cathode);
+  if(check_flag((void *)data_cathode, "malloc", 2)){
+    return(1);
+  }
+  
+  data = (Cell_Data) malloc(sizeof *data);
+  if(check_flag((void *)data, "malloc", 2)){
+    return(1);
+  }
+    
+  InitAnodeData(data_anode);
+  InitSepData(data_sep);
+  InitCathodeData(data_cathode);
+  InitCellData(data_anode, data_sep,data_cathode,data); 
 
+  
   /* Create vectors y, yp, res, constraints, id. */
   y = N_VNew_Serial(N);
   if(check_flag((void *)y, "N_VNew_Serial", 0)){
@@ -157,7 +184,7 @@ int main(void)
   }
   
   yp = N_VNew_Serial(N);
-  if(check_flag((void *)yp, "N_VNew_Serial", 0)) 
+  if(check_flag((void *)yp, "N_VNew_Serial", 0)){ 
     return(1);
   }
   
@@ -176,17 +203,9 @@ int main(void)
     return(1);
   }
   
-  InitAnodeData(data_anode);
-  InitSepData(data_sep);
-  InitCathodeData(data_cathode);
-  InitCellData(data_anode, data_sep,data_cathode,data);
   
 /* Create and load problem data block. */ 
-  data = (Cell_Data) malloc(sizeof *data);
-  if(check_flag((void *)data, "malloc", 2)){
-    return(1);
-  }
- 
+    
   //Need to initialize remaining constants by hardcoding them here. Need to take value from cffi in later iteration  
   //Do it in a separate function
   //Need to deal with units of all constants
@@ -250,7 +269,7 @@ int main(void)
 
   /* Loop over output times, call IDASolve, and print results. */
   
-  for (tout = t1, iout = 1; iout <= NOUT; iout++, tout *= TWO) {
+  for (tout = t1, iout = 1; iout <= 10; iout++, tout *= RCONST(2.0)) {
     
     ier = IDASolve(mem, tout, &tret, y, yp, IDA_NORMAL);
     if(check_flag(&ier, "IDASolve", 1)){
@@ -294,7 +313,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                         void *user_data)
 {
   long int j;
-  realtype *uv, *upv, *resv;
+  realtype *yv, *ypv, *resv;
   Cell_Data data;
   
   yv = NV_DATA_S(y); 
@@ -325,11 +344,11 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
  *y[3*GRID- 4*GRID-1] j
  *y[4*GRID-5*GRID-1]  c_s
  */
-static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,
+static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,
                              N_Vector y, N_Vector yp, N_Vector res,
                              N_Vector id, N_Vector constraints)
 {
-  realtype *ydata, *ypdata, *iddata, coeff, sigma, l_a, l_s;
+  realtype *ydata, *ypdata, *iddata,*constraintdata, l_a, l_s, c_0;
   long int i,j;
   int sep_indicator,cath_indicator;
   ydata = NV_DATA_S(y);
@@ -340,8 +359,8 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
   l_a = (data_anode->l)/(data_anode->l + data_sep->l + data_cathode->l);
   l_s = (data_anode->l+data_sep->l)/(data_anode->l + data_sep->l + data_cathode->l);
   
-  sep_indicator = int(l_a*GRID);
-  cath_indicator = int(l_s*GRID);
+  sep_indicator = (int)(l_a*RCONST(GRID));
+  cath_indicator = (int)(l_s*GRID);
   
   /* Initialize y on all grid points. */ 
   //Confirm all yp values
@@ -368,13 +387,13 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
                      constraintdata[i]=ZERO;
                      
                   }
-                  else if(i%GRID>0 && i%GRID<=l_a){
+                  else if(i%GRID>0 && i%GRID<=sep_indicator){
                       ydata[i]=ydata[i-1]-(data_anode->coeff)*I/(data_anode->sigma);
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
-                  else if(i%GRID>l_a && i%GRID<=l_s){
+                  else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
                       ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
@@ -411,13 +430,13 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
            
           case 4:
                  {
-                  if(i%GRID>0 && i%GRID<=l_a){
+                  if(i%GRID>0 && i%GRID<=sep_indicator){
                       ydata[i]=data_anode->c_s_0;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
                       constraintdata[i]=ONE;
                   }
-                  else if(i%GRID>l_a && i%GRID<=l_s){
+                  else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
                       ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
@@ -433,14 +452,15 @@ static int SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Mat
                   break;
                  }
   
-  return(0);
-
-}
+           }
+  
+  }
+}    
 
 static void InitAnodeData(Material_Data data_anode)
 {  
-  data_anode->dx = ONE/(GRID - ONE);
-  data_anode->coeff = ONE/(data->dx); 
+  data_anode->dx = ONE/(RCONST(GRID) - ONE);
+  data_anode->coeff = RCONST(GRID) - ONE; 
   data_anode->sigma = RCONST(100.0);
   data_anode->eps = RCONST(0.385);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
@@ -458,8 +478,8 @@ static void InitAnodeData(Material_Data data_anode)
 static void InitSepData(Material_Data data_sep)
 {  
   data_anode->dx = ONE/(GRID - ONE);
-  data_anode->coeff = ONE/(data->dx); 
-  data_anode->eps = RCONST(0.724);
+  data_anode->coeff = RCONST(GRID)-ONE; //Might redefine using 1/dx form for ease of reading code
+  data_anode->eps = RCONST(0.724);t
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(7.5e-10);
   data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG); 
@@ -470,8 +490,8 @@ static void InitSepData(Material_Data data_sep)
 
 static void InitCathodeData(Material_Data data_cathode)
 {  
-  data_anode->dx = ONE/(GRID - ONE);
-  data_anode->coeff = ONE/(data->dx); 
+  data_anode->dx = ONE/(RCONST(GRID) - ONE);
+  data_anode->coeff = RCONST(GRID) - ONE; 
   data_anode->sigma = RCONST(100.0);
   data_anode->eps = RCONST(0.0326);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
@@ -556,11 +576,23 @@ realtype ocp_cathode(realtype c,realtype c_max)
   realtype soc = c/c_max;
   realtype expr;
   expr = RCONST(0.7222)+RCONST(0.1387)*soc+RCONST(0.029)*SUNRpowerR(soc,RCONST(0.5))-
-          RCONST(0.0172)/soc+RCONST(0.0019)*SUNRpowerR(soc,RCONST(-1.5))+
-          RCONST(0.2808)*SUNRpowerR(RCONST(10.0),RCONST(0.90)-RCONST(15.0)*soc)-
-          RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
+         RCONST(0.0172)/soc+RCONST(0.0019)*SUNRpowerR(soc,RCONST(-1.5))+
+         RCONST(0.2808)*SUNRpowerR(RCONST(10.0),RCONST(0.90)-RCONST(15.0)*soc)-
+         RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
   return expr;
 }
+
+realtype FLOOR(realtype x)
+{
+  #if defined(SUNDIALS_USE_GENERIC_MATH)
+  return(floor((double) x));
+  #elif defined(SUNDIALS_DOUBLE_PRECISION)
+  return((floor(x));
+  #elif defined(SUNDIALS_SINGLE_PRECISION)
+  return(floor(x));
+  #elif defined(SUNDIALS_EXTENDED_PRECISION)
+  return(floor(x));
+  #endif
 
 /* 
  * Print first lines of output (problem description)
@@ -596,7 +628,7 @@ static void PrintHeader(realtype rtol, realtype atol)
   printf("  time       umax     k  nst  nni  nje   nre   nreLS    h      \n" );
   printf(" .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . \n");
 }
-
+*/
 /*
  * Print Output
  */

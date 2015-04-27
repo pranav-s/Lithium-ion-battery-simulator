@@ -6,19 +6,76 @@
 #include <ida/ida_band.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
-#include <sundials/sundials_math.h> 
+#include <sundials/sundials_math.h>
+//#include "half_cell_solver.c"
+
+#define GRID        100
+#define N_VAR       5    
+#define N           GRID*N_VAR 
+#define ZERO        RCONST(0.0)
+#define ONE         RCONST(1.0)
+#define T_PLUS      RCONST(0.363)
+#define R           RCONST(8.314)
+#define T           RCONST(298.15)
+#define F           RCONST(96487.0)
+#define BRUGG       RCONST(4.0)  //confirm if this is always constant
+#define I           RCONST(2.0)
+#define SUNDIALS_EXTENDED_PRECISION 1
+ 
+typedef struct {
+  realtype dx;
+  realtype coeff;
+  realtype eps;
+  realtype sigma;
+  realtype diff_coeff;
+  realtype radius;
+  realtype k;
+  realtype c_s_max;
+  realtype c_s_0;
+  realtype c_0;
+  realtype l;
+  realtype interfac_area;
+  realtype sigma_eff;
+  realtype diff_coeff_eff;
+} *Material_Data;
 
 realtype ocp_anode(realtype c,realtype c_max); //Consider using std library functions
 realtype ocp_cathode(realtype c,realtype c_max);
+static void InitAnodeData(Material_Data data_anode);
 
 int main(void){
   realtype b;
-  b=ocp_cathode(RCONST(5),RCONST(55));
-  printf("%3.2f\n",b);
+  Material_Data data_anode;
+  data_anode=NULL;
+  data_anode = (Material_Data) malloc(sizeof *data_anode);
+  InitAnodeData(data_anode);
+  printf("%3.8f\n",data_anode->eps);
+  printf("%3.8f\n",data_anode->l);
+  printf("%3.8f\n",data_anode->diff_coeff_eff);
+  printf("%3.8f\n",data_anode->k);
+  printf("%3.18f\n",data_anode->radius);
+  printf("%3.8df\n",data_anode->interfac_area);
   return 0;
 
 }
 
+static void InitAnodeData(Material_Data data_anode)
+{  
+  data_anode->dx = ONE/(GRID - ONE);
+  data_anode->coeff = ONE/(data_anode->dx); 
+  data_anode->sigma = RCONST(100.0);
+  data_anode->eps = RCONST(0.385);
+  data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
+  data_anode->diff_coeff = RCONST(1.0e-14);
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG);
+  data_anode->k = RCONST(2.334e-11);
+  data_anode->c_0 = RCONST(1000.0);
+  data_anode->c_s_max = RCONST(51554.0);
+  data_anode->c_s_0 = (data_anode->c_s_max)*RCONST(0.4955);
+  data_anode->l = RCONST(0.00008);
+  data_anode->radius = RCONST(0.000002);
+  data_anode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
+}
 
 realtype ocp_anode(realtype c,realtype c_max) //Consider using std library functions
 {
@@ -38,9 +95,9 @@ realtype ocp_cathode(realtype c,realtype c_max)
   realtype soc = c/c_max;
   realtype expr;
   expr = RCONST(0.7222)+RCONST(0.1387)*soc+RCONST(0.029)*SUNRpowerR(soc,RCONST(0.5))-
-          RCONST(0.0172)/soc+RCONST(0.0019)*SUNRpowerR(soc,RCONST(-1.5))+
-          RCONST(0.2808)*SUNRpowerR(RCONST(10.0),RCONST(0.90)-RCONST(15.0)*soc)-
-          RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
+         RCONST(0.0172)/soc+RCONST(0.0019)*SUNRpowerR(soc,RCONST(-1.5))+
+         RCONST(0.2808)*SUNRpowerR(RCONST(10.0),RCONST(0.90)-RCONST(15.0)*soc)-
+         RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
   return expr;
 }
 
