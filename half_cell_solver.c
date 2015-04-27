@@ -117,7 +117,8 @@ static void InitCathodeData(Material_Data data_cathode);
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data);
 realtype ocp_anode(realtype c,realtype c_max);
 realtype ocp_cathode(realtype c,realtype c_max);
-
+realtype SUNRpowerI(realtype a, int b);
+realtype SUNRpowerR(realtype a, realtype b);
 
 /* Prototypes of private functions */
 
@@ -128,8 +129,8 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
 
 static int check_flag(void *flagvalue, char *funcname, int opt);
 realtype kappa(realtype c, realtype eps);
-realtype U_a(realtype c_surf, realtype c_max);
-realtype U_c(realtype c_surf, realtype c_max); 
+realtype ocp_anode(realtype c_surf, realtype c_max);
+realtype ocp_cathode(realtype c_surf, realtype c_max); 
 
 /*
  *--------------------------------------------------------------------
@@ -293,8 +294,11 @@ int main(void)
   N_VDestroy_Serial(id);
   N_VDestroy_Serial(res);
   N_VDestroy_Serial(constraints);
+  free(data_anode);
+  free(data_sep);
+  free(data_cathode);
   free(data);
-
+  
   return(0);
 }
 
@@ -334,7 +338,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
  */
 
 /*
- * SetInitialProfile: routine to initialize u, up, and id vectors.       
+ * SetInitialProfile: routine to initialize y, yp,constraints and id vectors.       
  */
 /*y[0-(GRID-1)]       concentration
  *y[GRID-2*GRID-1]    ph1
@@ -346,7 +350,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                              N_Vector y, N_Vector yp, N_Vector res,
                              N_Vector id, N_Vector constraints)
 {
-  realtype *ydata, *ypdata, *iddata,*constraintdata, l_a, l_s, c_0;
+  realtype *ydata, *ypdata, *iddata,*constraintdata, l_a, l_s, c_0,phi1_a,phi1_c;
   long int i,j;
   int sep_indicator,cath_indicator;
   ydata = NV_DATA_S(y);
@@ -359,11 +363,13 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
   
   sep_indicator = (int)(l_a*RCONST(GRID));
   cath_indicator = (int)(l_s*GRID);
+  phi1_a = ocp_anode(data_anode->c_s_0,data_anode->c_s_max);
+  phi1_c = ocp_anode(data_cathode->c_s_0,data_cathode->c_s_max);
   
-  /* Initialize y on all grid points. */ 
-  //Confirm all yp values
+  /* Initialize y and yp on all grid points. */ 
   //Future refactoring: Can move all assignments to one block and pass arguments to it
-  //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later
+  //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later.
+  //Need to force to zero value in the equation as well
   for(i=0; i<N;i++){
       j=i/GRID;  
       switch(j){
@@ -378,15 +384,9 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
           
           case 1:
                  {
-                  if(i==GRID){
-                     ydata[i]=ZERO;
-                     ypdata[i]=ZERO;
-                     iddata[i]=ZERO;   
-                     constraintdata[i]=ZERO;
-                     
-                  }
-                  else if(i%GRID>0 && i%GRID<=sep_indicator){
-                      ydata[i]=ydata[i-1]-(data_anode->coeff)*I/(data_anode->sigma);
+                  
+                  if(i%GRID>=0 && i%GRID<=sep_indicator){
+                      ydata[i]=phi1_a;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
@@ -397,8 +397,8 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
-                  else{  //Not sure about initialization of phi1 at cathode boundary
-                      ydata[i]=ydata[i-1]-(data_cathode->coeff)*I/(data_cathode->sigma);
+                  else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
+                      ydata[i]=phi1_c;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;
                       constraintdata[i]=ZERO;
@@ -428,7 +428,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
            
           case 4:
                  {
-                  if(i%GRID>0 && i%GRID<=sep_indicator){
+                  if(i%GRID>=0 && i%GRID<=sep_indicator){
                       ydata[i]=data_anode->c_s_0;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
@@ -440,7 +440,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                       iddata[i]=ONE;   
                       constraintdata[i]=ONE;
                   }
-                  else{
+                  else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=data_cathode->c_s_0;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
@@ -548,7 +548,7 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
 realtype kappa(realtype c, realtype eps)
 {
     realtype exp_term, polynom_term;
-    exp_term = SUNRpowerI(eps,BRUGG);
+    exp_term = SUNRpowerR(eps,BRUGG);
     polynom_term = RCONST(4.1253e-2)+RCONST(5.007e-4)*c-RCONST(4.7212e-7)*SUNRpowerI(c,2)+
                    RCONST(1.5094)*SUNRpowerI(c,3)-RCONST(1.6018)*SUNRpowerI(c,4);
     

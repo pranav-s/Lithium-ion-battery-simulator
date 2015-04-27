@@ -18,7 +18,7 @@
 #define R           RCONST(8.314)
 #define T           RCONST(298.15)
 #define F           RCONST(96487.0)
-#define BRUGG       RCONST(4.0)  //confirm if this is always constant
+#define BRUGG       RCONST(4.0)
 #define I           RCONST(2.0)
 #define SUNDIALS_EXTENDED_PRECISION 1
  
@@ -39,7 +39,7 @@ typedef struct {
   realtype diff_coeff_eff;
 } *Material_Data;
 
-realtype ocp_anode(realtype c,realtype c_max); //Consider using std library functions
+realtype ocp_anode(realtype c,realtype c_max);
 realtype ocp_cathode(realtype c,realtype c_max);
 realtype kappa(realtype c, realtype eps);
 static void InitAnodeData(Material_Data data_anode);
@@ -84,7 +84,7 @@ static void InitAnodeData(Material_Data data_anode)
 realtype kappa(realtype c, realtype eps)
 {
     realtype exp_term, polynom_term;
-    exp_term = SUNRpowerI(eps,BRUGG);
+    exp_term = SUNRpowerR(eps,BRUGG);
     polynom_term = RCONST(4.1253e-2)+RCONST(5.007e-4)*c-RCONST(4.7212e-7)*SUNRpowerI(c,2)+
                    RCONST(1.5094)*SUNRpowerI(c,3)-RCONST(1.6018)*SUNRpowerI(c,4);
     
@@ -92,7 +92,7 @@ realtype kappa(realtype c, realtype eps)
   
 }
 
-realtype ocp_anode(realtype c,realtype c_max) //Consider using std library functions
+realtype ocp_anode(realtype c,realtype c_max)
 {
   realtype soc = c/c_max;
   realtype numer,denom;
