@@ -2,7 +2,7 @@
  * -----------------------------------------------------------------
  * $Date: 2015-04-26$
  * -----------------------------------------------------------------
- * Programmer(s): Pranav Shetty
+ * Programmer: Pranav Shetty
  *              
  * -----------------------------------------------------------------
  * Example problem towards building a full fledged LiB solver: A half cell solver.
@@ -30,7 +30,7 @@
 #include <ida/ida_band.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
-#include <sundials/sundials_math.h> //Not sure if will be able to call std library functions from here
+#include <sundials/sundials_math.h>
 
 /* Problem Constants */
 
@@ -39,13 +39,13 @@
 #define N           GRID*N_VAR 
 #define ZERO        RCONST(0.0)
 #define ONE         RCONST(1.0)
+#define TWO         RCONST(2.0)
 #define T_PLUS      RCONST(0.363)
 #define R           RCONST(8.314)
 #define T           RCONST(298.15)
 #define F           RCONST(96487.0)
 #define BRUGG       RCONST(4.0)  //confirm if this is always constant
 #define I           RCONST(2.0)
-#define SUNDIALS EXTENDED PRECISION 1
 
 //Problem constants defined in preprocessor in this file. Need to keep all problem constants in a unique location in the next version
 //Might have to refactor to relabel anode & cathode
@@ -66,6 +66,7 @@ typedef struct {
   realtype interfac_area;
   realtype sigma_eff;
   realtype diff_coeff_eff;
+  realtype diff_coeff_solid;
 } *Material_Data;
 
 typedef struct {
@@ -83,6 +84,7 @@ typedef struct {
   realtype interfac_area_a;
   realtype sigma_eff_a;
   realtype diff_coeff_eff_a;
+  realtype diff_coeff_eff_solid_a;
   
   realtype dx_s;
   realtype coeff_s;
@@ -97,6 +99,7 @@ typedef struct {
   realtype eps_c;
   realtype sigma_c;
   realtype diff_coeff_c;
+  realtype diff_coeff_eff_solid_c;
   realtype radius_c;
   realtype k_c;
   realtype c_s_max_c;
@@ -106,6 +109,8 @@ typedef struct {
   realtype interfac_area_c;
   realtype sigma_eff_c;
   realtype diff_coeff_eff_c;
+  
+  int sep_indicator, cath_indicator;
 } *Cell_Data;
 
 /* Prototypes of functions called by IDA */
@@ -117,8 +122,9 @@ static void InitCathodeData(Material_Data data_cathode);
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data);
 realtype ocp_anode(realtype c,realtype c_max);
 realtype ocp_cathode(realtype c,realtype c_max);
-realtype SUNRpowerI(realtype a, int b);
-realtype SUNRpowerR(realtype a, realtype b);
+//realtype SUNRpowerI(realtype a, int b);
+//realtype SUNRpowerR(realtype a, realtype b);
+realtype Rsinh(realtype x)l
 
 /* Prototypes of private functions */
 
@@ -130,7 +136,8 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
 static int check_flag(void *flagvalue, char *funcname, int opt);
 realtype kappa(realtype c, realtype eps);
 realtype ocp_anode(realtype c_surf, realtype c_max);
-realtype ocp_cathode(realtype c_surf, realtype c_max); 
+realtype ocp_cathode(realtype c_surf, realtype c_max);
+realtype Rlog(realtype x); 
 
 /*
  *--------------------------------------------------------------------
@@ -316,16 +323,189 @@ int main(void)
 int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, 
                         void *user_data)
 {
-  long int j;
+  long int j, i;
+  int sep_indicator,cath_indicator;
   realtype *yv, *ypv, *resv;
   Cell_Data data;
   
   yv = NV_DATA_S(y); 
   ypv = NV_DATA_S(yp); 
   resv = NV_DATA_S(resval);
-  
   data = (Cell_Data)user_data;
   
+  sep_indicator = data->sep_indicator;
+  cath_indicator = data->cath_indicator;
+
+  for(i=0; i<N;i++){
+      j=i/GRID;  
+      switch(j){
+          case 0: //c
+                 {
+                  if(i%GRID==0){
+                      resv[i] = yv[i+1]-yv[i];
+                  }
+                  
+                  else if(i%GRID>0 && i%GRID<sep_indicator){
+                      resv[i] = (data->eps_a)*ypv[i]-(data->diff_coeff_eff_a)*SUNRpowerI(data->coeff_a,2)*
+                                (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_a)*(ONE-T_PLUS)*yv[i+3*GRID];//check here
+                      
+                  }
+                  
+                  else if(i%GRID==sep_indicator){
+                      resv[i] = (data->diff_coeff_eff_s)*yv[i+1]-(data->diff_coeff_eff_a)*yv[i];
+                  }
+                  
+                  else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
+                      resv[i] = (data->eps_s)*ypv[i]-(data->diff_coeff_eff_s)*SUNRpowerI(data->coeff_s,2)*
+                                (yv[i+1]+yv[i-1]-TWO*yv[i]);
+                      
+                  }
+                  
+                  else if(i%GRID==cath_indicator){
+                      resv[i] = (data->diff_coeff_eff_c)*yv[i+1]-(data->diff_coeff_eff_s)*yv[i];
+                  }
+                  
+                  else if(i%GRID>cath_indicator && i%GRID<GRID-1){
+                      resv[i] = (data->eps_c)*ypv[i]-(data->diff_coeff_eff_c)*SUNRpowerI(data->coeff_c,2)*
+                                (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_c)*(ONE-T_PLUS)*yv[i+3*GRID];;
+                     
+                  }
+                  
+                  else if(i%GRID==GRID-1){
+                      resv[i] = yv[i]-yv[i-1];
+                  }
+                  
+                  break;
+                 }
+          
+          case 1: //phi1
+                                   
+                {
+                  if(i%GRID==0){
+                      resv[i] = (data->coeff_a)*(yv[i+1]-yv[i])+I/(data->sigma_eff_a);
+                  }
+                  //Might need additional BC
+                  else if(i%GRID>0 && i%GRID<=sep_indicator){
+                      resv[i] = (data->sigma_eff_a)*SUNRpowerI(data->coeff_a,2)*(yv[i+1]+yv[i-1] - TWO*y[i]) -
+                                (data->interfac_area_a)*F*yv[i+2*GRID];//Check
+                      
+                  }
+                  /*
+                  else if(i%GRID==sep_indicator){
+                      resv[i] = 
+                  }
+                  */
+                  else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
+                      resv[i] = yv[i] - ZERO;
+                      
+                  }
+                  
+                  else if(i%GRID==cath_indicator){
+                      resv[i] = yv[i]-yv[i-1];
+                  }
+                  
+                  else if(i%GRID>cath_indicator && i%GRID<GRID-1){
+                      resv[i] = (data->sigma_eff_c)*SUNRpowerI(data->coeff_c,2)*(yv[i+1]+yv[i-1]-TWO*y[i])-
+                                (data->interfac_area_c)*F*yv[i+2*GRID];//Check
+                     
+                  }
+                  
+                  else if(i%GRID==GRID-1){
+                      resv[i] = (data->coeff_c)*(yv[i]-yv[i-1])+I/(data->sigma_eff_c);
+                  }
+                  
+                  break;
+                }
+                  
+          
+          case 2://phi2
+                 {
+                  if(i%GRID==0){
+                      resv[i] = kappa(yv[i+1-2*GRID],data->eps_a)*yv[i+1]-kappa(yv[i-2*GRID],data->eps_a)*yv[i];
+                  }
+                  
+                  else if(i%GRID>0 && i%GRID<sep_indicator){
+                      resv[i] = I+(data->sigma_eff_a)*(data->coeff_a)*(yv[i+1-GRID]-yv[i-GRID])+
+                                kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i])-
+                                TWO*kappa(yv[i-2*GRID],data->eps_a)*R*T*(ONE/F)*(data->coeff_a)*(ONE-T_PLUS)*
+                                (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
+                                
+                                                                                      
+                  }
+                  
+                  else if(i%GRID==sep_indicator){
+                      resv[i] = kappa(yv[i+1-2*GRID],data->eps_s)*(yv[i+1]-yv[i])-kappa(yv[i-2*GRID],data->eps_a)*
+                                (yv[i]-yv[i-1]);
+                  }
+                  
+                  else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
+                      resv[i] = I+kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i])-
+                                TWO*kappa(yv[i-2*GRID],data->eps_a)*R*T*(ONE/F)*(data->coeff_a)*(ONE-T_PLUS)*
+                                (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
+                      
+                  }
+                  
+                  else if(i%GRID==cath_indicator){
+                      resv[i] = kappa(yv[i+1-2*GRID],data->eps_c)*(yv[i+1]-yv[i])-kappa(yv[i-2*GRID],data->eps_s)*
+                                (yv[i]-yv[i-1]);
+                  }
+                  
+                  else if(i%GRID>cath_indicator && i%GRID<GRID-1){
+                      resv[i] = I+(data->sigma_eff_c)*(data->coeff_c)*(yv[i+1-GRID]-yv[i-GRID])+
+                                kappa(yv[i-2*GRID],data->eps_c)*(data->coeff_c)*(yv[i+1]-yv[i])-
+                                TWO*kappa(yv[i-2*GRID],data->eps_c)*R*T*(ONE/F)*(data->coeff_c)*(ONE-T_PLUS)*
+                                (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
+                     
+                  }
+                  
+                  else if(i%GRID==GRID-1){
+                      resv[i] = yv[i]-yv[i-1];
+                  }
+                  
+                  break;
+                }
+          
+          case 3://j
+                 {
+                  if(i%GRID>=0 && i%GRID<=sep_indicator){
+                      resv[i] = yv[i] - TWO*(data->k_a)*SUNRpowerR(yv[i-3*GRID],RCONST(0.5))*
+                                Rsinh(          
+                                (data->c_s_max_a -(yv[i+GRID]-yv[i]*(data->radius_a)/(RCONST(5.0)*(data->diff_solid_a))));
+                      
+                  }
+                  else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
+                      resv[i]=yv[i] - ZERO;
+                      
+                  }
+                  else if(i%GRID>=cath_indicator && i%GRID<=GRID-1){
+                      resv[i] = ;
+                     
+                  }
+                  
+                  break;
+                 }  
+           
+          case 4:
+                 {
+                  if(i%GRID>=0 && i%GRID<=sep_indicator){
+                      resv[i] = ;
+                      
+                  }
+                  else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
+                      resv[i]=yv[i] - ZERO;
+                      
+                  }
+                  else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
+                      resv[i] = ;
+                     
+                  }
+ 
+                  break;
+                 }
+  
+           }
+  
+  }
   
   return(0);
 
@@ -338,7 +518,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
  */
 
 /*
- * SetInitialProfile: routine to initialize y, yp,constraints and id vectors.       
+ * SetInitialProfile: routine to initialize y, yp,constraints and id vectors       
  */
 /*y[0-(GRID-1)]       concentration
  *y[GRID-2*GRID-1]    ph1
@@ -350,7 +530,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                              N_Vector y, N_Vector yp, N_Vector res,
                              N_Vector id, N_Vector constraints)
 {
-  realtype *ydata, *ypdata, *iddata,*constraintdata, l_a, l_s, c_0,phi1_a,phi1_c;
+  realtype *ydata, *ypdata, *iddata,*constraintdata, c_0,phi1_a,phi1_c;
   long int i,j;
   int sep_indicator,cath_indicator;
   ydata = NV_DATA_S(y);
@@ -358,11 +538,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
   iddata = NV_DATA_S(id);
   constraintdata = NV_DATA_S(constraints);
   c_0 = data_anode->c_0;
-  l_a = (data_anode->l)/(data_anode->l + data_sep->l + data_cathode->l);
-  l_s = (data_anode->l+data_sep->l)/(data_anode->l + data_sep->l + data_cathode->l);
   
-  sep_indicator = (int)(l_a*RCONST(GRID));
-  cath_indicator = (int)(l_s*GRID);
   phi1_a = ocp_anode(data_anode->c_s_0,data_anode->c_s_max);
   phi1_c = ocp_anode(data_cathode->c_s_0,data_cathode->c_s_max);
   
@@ -463,7 +639,8 @@ static void InitAnodeData(Material_Data data_anode)
   data_anode->eps = RCONST(0.385);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(1.0e-14);
-  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG));
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerR((data_anode->eps),BRUGG));
+  data_anode->diff_coeff_solid = RCONST(1.0e-14);
   data_anode->k = RCONST(2.334e-11);
   data_anode->c_0 = RCONST(1000.0);
   data_anode->c_s_max = RCONST(51554.0);
@@ -480,7 +657,8 @@ static void InitSepData(Material_Data data_sep)
   data_sep->eps = RCONST(0.724);t
   data_sep->sigma_eff = (data_sep->sigma)*(1-data_sep->eps);
   data_sep->diff_coeff = RCONST(7.5e-10);
-  data_sep->diff_coeff_eff = (data_sep->diff_coeff)*SUNRpowerI((data_sep->eps),BRUGG); 
+  data_sep->diff_coeff_eff = (data_sep->diff_coeff)*SUNRpowerR((data_sep->eps),BRUGG);
+  
   data_sep->c_0 = RCONST(1000.0);
   data_sep->l = RCONST(25.0e-6);
 }
@@ -494,7 +672,8 @@ static void InitCathodeData(Material_Data data_cathode)
   data_cathode->eps = RCONST(0.0326);
   data_cathode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_cathode->diff_coeff = RCONST(3.9e-14);
-  data_cathode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG); 
+  data_cathode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerR((data_anode->eps),BRUGG);
+  data_cathode->diff_coeff_solid = RCONST(3.9e-14);
   data_cathode->k = RCONST(5.0307e-11);
   data_cathode->c_0 = RCONST(1000.0);
   data_cathode->c_s_max = RCONST(30555.0);
@@ -506,6 +685,8 @@ static void InitCathodeData(Material_Data data_cathode)
 
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data)
 {
+  realtype l_a, l_s;
+  
   data->dx_a = data_anode->dx;
   data->coeff = data_anode->coeff;
   data->eps_a = data_anode->eps;
@@ -513,6 +694,7 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   data->sigma_eff_a = data_anode->sigma_eff;
   data->diff_coeff_a = data_anode->diff_coeff;
   data->diff_coeff_eff_a = data_anode->diff_coeff_eff;
+  data->diff_coeff_eff_solid_a = data_anode->diff_coeff_eff_solid;
   data->k_a = data_anode->k;
   data->c_0_a = data_anode->c_0;
   data->c_s_max_a = data_anode->c_s_max;
@@ -534,8 +716,9 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   data->eps_c = data_cathode->eps;
   data->sigma_c = data_cathode->sigma;
   data->sigma_eff_c = data_cathode->sigma_eff;
-  data->diff_coeff_eff_c = data_cathode->diff_coeff;
-  data->diff_coeff_c = data_cathode->diff_coeff_eff;
+  data->diff_coeff_c = data_cathode->diff_coeff;
+  data->diff_coeff_eff_c = data_cathode->diff_coeff_eff;
+  data->diff_coeff_eff_solid_c = data_cathode->diff_coeff_eff_solid;
   data->k_c = data_cathode->k;
   data->c_0_c = data_cathode->c_0;
   data->c_s_max_c = data_cathode->c_s_max;
@@ -543,6 +726,12 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   data->l_c = data_cathode->l;
   data->radius_c = data_cathode->radius;
   data->interfac_area_c = data_cathode->interfac_area;
+  
+  l_a = (data_anode->l)/(data_anode->l + data_sep->l + data_cathode->l);
+  l_s = (data_anode->l+data_sep->l)/(data_anode->l + data_sep->l + data_cathode->l);
+  
+  data->sep_indicator = (int)(l_a*RCONST(GRID));
+  data->cath_indicator = (int)(l_s*GRID);
 }
 
 realtype kappa(realtype c, realtype eps)
@@ -579,6 +768,39 @@ realtype ocp_cathode(realtype c,realtype c_max)
          RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
   return expr;
 }
+
+realtype Rlog(realtype x)
+{
+  if (x <= ZERO)
+    return(ZERO);
+  }
+ 
+ #if defined(SUNDIALS_USE_GENERIC_MATH)
+  return((realtype) log((double) x));
+ #elif defined(SUNDIALS_DOUBLE_PRECISION)
+  return(log(x));
+ #elif defined(SUNDIALS_SINGLE_PRECISION)
+  return(log(x));
+ #elif defined(SUNDIALS_EXTENDED_PRECISION)
+  return(log(x));
+ #endif
+}
+
+realtype Rsinh(realtype x)
+{
+ 
+ #if defined(SUNDIALS_USE_GENERIC_MATH)
+  return((realtype) sinh((double) x));
+ #elif defined(SUNDIALS_DOUBLE_PRECISION)
+  return(sinh(x));
+ #elif defined(SUNDIALS_SINGLE_PRECISION)
+  return(sinh(x));
+ #elif defined(SUNDIALS_EXTENDED_PRECISION)
+  return(sinh(x));
+ #endif
+}
+
+
 /* May not be required
 realtype FLOOR(realtype x)
 {

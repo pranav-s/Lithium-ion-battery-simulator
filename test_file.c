@@ -20,7 +20,6 @@
 #define F           RCONST(96487.0)
 #define BRUGG       RCONST(4.0)
 #define I           RCONST(2.0)
-#define SUNDIALS_EXTENDED_PRECISION 1
  
 typedef struct {
   realtype dx;
@@ -71,7 +70,7 @@ static void InitAnodeData(Material_Data data_anode)
   data_anode->eps = RCONST(0.385);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(1.0e-14);
-  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerI((data_anode->eps),BRUGG);
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerR((data_anode->eps),BRUGG);
   data_anode->k = RCONST(2.334e-11);
   data_anode->c_0 = RCONST(1000.0);
   data_anode->c_s_max = RCONST(51554.0);
