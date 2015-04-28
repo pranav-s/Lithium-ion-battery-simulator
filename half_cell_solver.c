@@ -84,7 +84,7 @@ typedef struct {
   realtype interfac_area_a;
   realtype sigma_eff_a;
   realtype diff_coeff_eff_a;
-  realtype diff_coeff_eff_solid_a;
+  realtype diff_coeff_solid_a;
   
   realtype dx_s;
   realtype coeff_s;
@@ -99,7 +99,7 @@ typedef struct {
   realtype eps_c;
   realtype sigma_c;
   realtype diff_coeff_c;
-  realtype diff_coeff_eff_solid_c;
+  realtype diff_coeff_solid_c;
   realtype radius_c;
   realtype k_c;
   realtype c_s_max_c;
@@ -122,9 +122,10 @@ static void InitCathodeData(Material_Data data_cathode);
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data);
 realtype ocp_anode(realtype c,realtype c_max);
 realtype ocp_cathode(realtype c,realtype c_max);
-//realtype SUNRpowerI(realtype a, int b);
-//realtype SUNRpowerR(realtype a, realtype b);
-realtype Rsinh(realtype x)l
+realtype SUNRpowerI(realtype a, int b);
+realtype SUNRpowerR(realtype a, realtype b);
+realtype Rsinh(realtype x);
+realtype Rlog(realtype x); 
 
 /* Prototypes of private functions */
 
@@ -137,7 +138,6 @@ static int check_flag(void *flagvalue, char *funcname, int opt);
 realtype kappa(realtype c, realtype eps);
 realtype ocp_anode(realtype c_surf, realtype c_max);
 realtype ocp_cathode(realtype c_surf, realtype c_max);
-realtype Rlog(realtype x); 
 
 /*
  *--------------------------------------------------------------------
@@ -469,8 +469,10 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                  {
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
                       resv[i] = yv[i] - TWO*(data->k_a)*SUNRpowerR(yv[i-3*GRID],RCONST(0.5))*
-                                Rsinh(          
-                                (data->c_s_max_a -(yv[i+GRID]-yv[i]*(data->radius_a)/(RCONST(5.0)*(data->diff_solid_a))));
+                                Rsinh(RCONST(0.5)*(F/(R*T))*(yv[i-2*GRID]-yv[i-GRID]-
+                                ocp_anode(yv[i+GRID],data->c_s_max_a)))*          
+                                (data->c_s_max_a -(yv[i+GRID]-yv[i]*(data->radius_a)/(RCONST(5.0)*(data
+                                ->diff_coeff_solid_a))));
                       
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
@@ -478,7 +480,11 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                       
                   }
                   else if(i%GRID>=cath_indicator && i%GRID<=GRID-1){
-                      resv[i] = ;
+                      resv[i] = yv[i] - TWO*(data->k_s)*SUNRpowerR(yv[i-3*GRID],RCONST(0.5))*
+                                Rsinh(RCONST(0.5)*(F/(R*T))*(yv[i-2*GRID]-yv[i-GRID]-
+                                ocp_cathode(yv[i+GRID],data->c_s_max_c)))*          
+                                (data->c_s_max_c -(yv[i+GRID]-yv[i]*(data->radius_c)/(RCONST(5.0)*(data
+                                ->diff_coeff_solid_c))));;
                      
                   }
                   
@@ -488,7 +494,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
           case 4:
                  {
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
-                      resv[i] = ;
+                      resv[i] = ypv[i]+3*yv[i-GRID]/(data->radius_a);
                       
                   }
                   else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
@@ -496,7 +502,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                       
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
-                      resv[i] = ;
+                      resv[i] = ypv[i]+3*yv[i-GRID]/(data->radius_c);
                      
                   }
  
@@ -530,7 +536,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                              N_Vector y, N_Vector yp, N_Vector res,
                              N_Vector id, N_Vector constraints)
 {
-  realtype *ydata, *ypdata, *iddata,*constraintdata, c_0,phi1_a,phi1_c;
+  realtype *ydata, *ypdata, *iddata,*constraintdata, c_0,l_a,l_c,phi1_a,phi1_c;
   long int i,j;
   int sep_indicator,cath_indicator;
   ydata = NV_DATA_S(y);
@@ -538,6 +544,13 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
   iddata = NV_DATA_S(id);
   constraintdata = NV_DATA_S(constraints);
   c_0 = data_anode->c_0;
+  
+  l_a = (data_anode->l)/(data_anode->l + data_sep->l + data_cathode->l);
+  l_s = (data_anode->l+data_sep->l)/(data_anode->l + data_sep->l + data_cathode->l);
+  
+  sep_indicator = (int)(l_a*RCONST(GRID));
+  cath_indicator = (int)(l_s*GRID);
+
   
   phi1_a = ocp_anode(data_anode->c_s_0,data_anode->c_s_max);
   phi1_c = ocp_anode(data_cathode->c_s_0,data_cathode->c_s_max);
@@ -639,7 +652,7 @@ static void InitAnodeData(Material_Data data_anode)
   data_anode->eps = RCONST(0.385);
   data_anode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
   data_anode->diff_coeff = RCONST(1.0e-14);
-  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerR((data_anode->eps),BRUGG));
+  data_anode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerR((data_anode->eps),BRUGG);
   data_anode->diff_coeff_solid = RCONST(1.0e-14);
   data_anode->k = RCONST(2.334e-11);
   data_anode->c_0 = RCONST(1000.0);
@@ -654,8 +667,8 @@ static void InitSepData(Material_Data data_sep)
 {  
   data_sep->dx = ONE/(GRID - ONE);
   data_sep->coeff = ONE/(data_sep->dx);
-  data_sep->eps = RCONST(0.724);t
-  data_sep->sigma_eff = (data_sep->sigma)*(1-data_sep->eps);
+  data_sep->eps = RCONST(0.724);
+  data_sep->sigma_eff = (data_sep->sigma)*(ONE-data_sep->eps);
   data_sep->diff_coeff = RCONST(7.5e-10);
   data_sep->diff_coeff_eff = (data_sep->diff_coeff)*SUNRpowerR((data_sep->eps),BRUGG);
   
@@ -670,17 +683,17 @@ static void InitCathodeData(Material_Data data_cathode)
   data_cathode->coeff = ONE/(data_cathode->dx);
   data_cathode->sigma = RCONST(100.0);
   data_cathode->eps = RCONST(0.0326);
-  data_cathode->sigma_eff = (data_anode->sigma)*(1-data_anode->eps);
+  data_cathode->sigma_eff = (data_cathode->sigma)*(ONE-data_cathode->eps);
   data_cathode->diff_coeff = RCONST(3.9e-14);
-  data_cathode->diff_coeff_eff = (data_anode->diff_coeff)*SUNRpowerR((data_anode->eps),BRUGG);
+  data_cathode->diff_coeff_eff = (data_cathode->diff_coeff)*SUNRpowerR((data_cathode->eps),BRUGG);
   data_cathode->diff_coeff_solid = RCONST(3.9e-14);
   data_cathode->k = RCONST(5.0307e-11);
   data_cathode->c_0 = RCONST(1000.0);
   data_cathode->c_s_max = RCONST(30555.0);
-  data_cathode->c_s_0 = (data_anode->c_s_max)*RCONST(0.8551);
+  data_cathode->c_s_0 = (data_cathode->c_s_max)*RCONST(0.8551);
   data_cathode->l = RCONST(88.0e-6);
   data_cathode->radius = RCONST(2.0e-6);
-  data_cathode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
+  data_cathode->interfac_area = RCONST(3.0)*(ONE-data_cathode->eps)/(data_cathode->radius);
 }
 
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data)
@@ -694,7 +707,7 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   data->sigma_eff_a = data_anode->sigma_eff;
   data->diff_coeff_a = data_anode->diff_coeff;
   data->diff_coeff_eff_a = data_anode->diff_coeff_eff;
-  data->diff_coeff_eff_solid_a = data_anode->diff_coeff_eff_solid;
+  data->diff_coeff_solid_a = data_anode->diff_coeff_solid;
   data->k_a = data_anode->k;
   data->c_0_a = data_anode->c_0;
   data->c_s_max_a = data_anode->c_s_max;
@@ -718,7 +731,7 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   data->sigma_eff_c = data_cathode->sigma_eff;
   data->diff_coeff_c = data_cathode->diff_coeff;
   data->diff_coeff_eff_c = data_cathode->diff_coeff_eff;
-  data->diff_coeff_eff_solid_c = data_cathode->diff_coeff_eff_solid;
+  data->diff_coeff_solid_c = data_cathode->diff_coeff_solid;
   data->k_c = data_cathode->k;
   data->c_0_c = data_cathode->c_0;
   data->c_s_max_c = data_cathode->c_s_max;
@@ -772,6 +785,7 @@ realtype ocp_cathode(realtype c,realtype c_max)
 realtype Rlog(realtype x)
 {
   if (x <= ZERO)
+  {
     return(ZERO);
   }
  
