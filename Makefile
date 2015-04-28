@@ -50,7 +50,7 @@ LIBRARIES_BL =  /usr/lib/liblapack.so.3gf /usr/lib/libblas.so.3gf
 LIBRARIES_SLUMT = 
 LIBRARIES_KLU =    
 
-EXAMPLES =  idaHeat1D_bnd
+EXAMPLES =  half_cell_solver
 
 OBJECTS = ${EXAMPLES:=.o}
 

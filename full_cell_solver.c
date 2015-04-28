@@ -132,7 +132,7 @@ realtype Rlog(realtype x);
 //static void PrintHeader(realtype rtol, realtype atol);
 //static void PrintOutput(void *mem, realtype t, N_Vector u);
 static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode, N_Vector y,
-                              N_Vector yp, N_Vector id, N_Vector res, N_Vector constraints);
+                              N_Vector yp, N_Vector id, N_Vector constraints);
 
 static int check_flag(void *flagvalue, char *funcname, int opt);
 realtype kappa(realtype c, realtype eps);
@@ -152,7 +152,7 @@ int main(void)
   Cell_Data data;
   N_Vector y, yp, constraints, id, res;
   int ier, iout;
-  long int mu, ml, netf, ncfn;
+  long int mu, ml;
   realtype rtol, atol, t0, t1, tout, tret;
   mem = NULL;
   data_anode = data_cathode = data_sep = NULL;
@@ -160,24 +160,24 @@ int main(void)
   y = yp = constraints = id = res = NULL;
   
   data_anode = (Material_Data) malloc(sizeof *data_anode);
-  if(check_flag((void *)data_anode, "malloc", 2)){
+  /*if(check_flag((void *)data_anode, "malloc", 2)){
     return(1);
-  }
+  }*/
   
   data_sep = (Material_Data) malloc(sizeof *data_sep);
-  if(check_flag((void *)data_sep, "malloc", 2)){
+  /*if(check_flag((void *)data_sep, "malloc", 2)){
     return(1);
-  }
+  }*/
   
   data_cathode = (Material_Data) malloc(sizeof *data_cathode);
-  if(check_flag((void *)data_cathode, "malloc", 2)){
+  /*if(check_flag((void *)data_cathode, "malloc", 2)){
     return(1);
-  }
+  }*/
   
   data = (Cell_Data) malloc(sizeof *data);
-  if(check_flag((void *)data, "malloc", 2)){
+  /*if(check_flag((void *)data, "malloc", 2)){
     return(1);
-  }
+  }*/
     
   InitAnodeData(data_anode);
   InitSepData(data_sep);
@@ -219,7 +219,7 @@ int main(void)
   //Need to deal with units of all constants
 
   /* Initialize y, yp, id. */
-  SetInitialProfile(data_anode,data_sep,data_cathode, y, yp, id, res, constraints);
+  SetInitialProfile(data_anode,data_sep,data_cathode, y, yp, id, constraints);
 
   /* Set remaining input parameters. */
   t0   = ZERO;
@@ -265,10 +265,11 @@ int main(void)
  
   /* Call IDACalcIC to correct the initial values. */
   
-  ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
+  /*/ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
   if(check_flag(&ier, "IDACalcIC", 1)){ 
     return(1);
   }
+  */
   /* Print output heading. */
   //PrintHeader(rtol, atol);  
   
@@ -323,36 +324,40 @@ int main(void)
 int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, 
                         void *user_data)
 {
-  long int j, i;
+  long int j, i, N_t;
   int sep_indicator,cath_indicator;
   realtype *yv, *ypv, *resv;
   Cell_Data data;
-  
   yv = NV_DATA_S(y); 
   ypv = NV_DATA_S(yp); 
   resv = NV_DATA_S(resval);
   data = (Cell_Data)user_data;
-  
+  N_t = N;//temp
   sep_indicator = data->sep_indicator;
   cath_indicator = data->cath_indicator;
-
-  for(i=0; i<N;i++){
-      j=i/GRID;  
+  
+  for(i=0; i<N_t;i++){
+     printf("%3.5f\n",ydata[i]);
+  }
+  
+  for(i=0; i<N_t;i++){
+      j=i/GRID;  //temp
       switch(j){
           case 0: //c
                  {
                   if(i%GRID==0){
                       resv[i] = yv[i+1]-yv[i];
+                      //printf("%3.5f\n",resv[i]);
                   }
                   
                   else if(i%GRID>0 && i%GRID<sep_indicator){
                       resv[i] = (data->eps_a)*ypv[i]-(data->diff_coeff_eff_a)*SUNRpowerI(data->coeff_a,2)*
                                 (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_a)*(ONE-T_PLUS)*yv[i+3*GRID];//check here
-                      
+                      //printf("%3.5f\n",resv[i]);
                   }
                   
                   else if(i%GRID==sep_indicator){
-                      resv[i] = (data->diff_coeff_eff_s)*yv[i+1]-(data->diff_coeff_eff_a)*yv[i];
+                      resv[i] = (data->diff_coeff_eff_s)*(yv[i+1]-yv[i])-(data->diff_coeff_eff_a)*(yv[i]-yv[i-1]);
                   }
                   
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
@@ -362,7 +367,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   }
                   
                   else if(i%GRID==cath_indicator){
-                      resv[i] = (data->diff_coeff_eff_c)*yv[i+1]-(data->diff_coeff_eff_s)*yv[i];
+                      resv[i] = (data->diff_coeff_eff_c)*(yv[i+1]-yv[i])-(data->diff_coeff_eff_s)*(yv[i]-yv[i-1]);
                   }
                   
                   else if(i%GRID>cath_indicator && i%GRID<GRID-1){
@@ -386,7 +391,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   }
                   //Might need additional BC
                   else if(i%GRID>0 && i%GRID<=sep_indicator){
-                      resv[i] = (data->sigma_eff_a)*SUNRpowerI(data->coeff_a,2)*(yv[i+1]+yv[i-1] - TWO*y[i]) -
+                      resv[i] = (data->sigma_eff_a)*SUNRpowerI(data->coeff_a,2)*(yv[i+1]+yv[i-1]-TWO*yv[i]) -
                                 (data->interfac_area_a)*F*yv[i+2*GRID];//Check
                       
                   }
@@ -401,11 +406,11 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   }
                   
                   else if(i%GRID==cath_indicator){
-                      resv[i] = yv[i]-yv[i-1];
+                      resv[i] = yv[i]-yv[i-1]; //Might use forward euler here
                   }
                   
                   else if(i%GRID>cath_indicator && i%GRID<GRID-1){
-                      resv[i] = (data->sigma_eff_c)*SUNRpowerI(data->coeff_c,2)*(yv[i+1]+yv[i-1]-TWO*y[i])-
+                      resv[i] = (data->sigma_eff_c)*SUNRpowerI(data->coeff_c,2)*(yv[i+1]+yv[i-1]-TWO*yv[i])-
                                 (data->interfac_area_c)*F*yv[i+2*GRID];//Check
                      
                   }
@@ -440,7 +445,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       resv[i] = I+kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i])-
-                                TWO*kappa(yv[i-2*GRID],data->eps_a)*R*T*(ONE/F)*(data->coeff_a)*(ONE-T_PLUS)*
+                                TWO*kappa(yv[i-2*GRID],data->eps_a)*(R*T/F)*(data->coeff_a)*(ONE-T_PLUS)*
                                 (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
                       
                   }
@@ -480,21 +485,21 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                       
                   }
                   else if(i%GRID>=cath_indicator && i%GRID<=GRID-1){
-                      resv[i] = yv[i] - TWO*(data->k_s)*SUNRpowerR(yv[i-3*GRID],RCONST(0.5))*
+                      resv[i] = yv[i] - TWO*(data->k_c)*SUNRpowerR(yv[i-3*GRID],RCONST(0.5))*
                                 Rsinh(RCONST(0.5)*(F/(R*T))*(yv[i-2*GRID]-yv[i-GRID]-
                                 ocp_cathode(yv[i+GRID],data->c_s_max_c)))*          
                                 (data->c_s_max_c -(yv[i+GRID]-yv[i]*(data->radius_c)/(RCONST(5.0)*(data
-                                ->diff_coeff_solid_c))));;
+                                ->diff_coeff_solid_c))));
                      
                   }
                   
                   break;
                  }  
            
-          case 4:
+          case 4://c_s
                  {
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
-                      resv[i] = ypv[i]+3*yv[i-GRID]/(data->radius_a);
+                      resv[i] = ypv[i]+RCONST(3.0)*yv[i-GRID]/(data->radius_a);
                       
                   }
                   else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
@@ -502,7 +507,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                       
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
-                      resv[i] = ypv[i]+3*yv[i-GRID]/(data->radius_c);
+                      resv[i] = ypv[i]+RCONST(3.0)*yv[i-GRID]/(data->radius_c);
                      
                   }
  
@@ -533,11 +538,12 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
  *y[4*GRID-5*GRID-1]  c_s
  */
 static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,
-                             N_Vector y, N_Vector yp, N_Vector res,
+                             N_Vector y, N_Vector yp,
                              N_Vector id, N_Vector constraints)
 {
-  realtype *ydata, *ypdata, *iddata,*constraintdata, c_0,l_a,l_c,phi1_a,phi1_c;
-  long int i,j;
+  realtype *ydata, *ypdata, *iddata,*constraintdata, c_0,l_a,l_s,phi1_a,phi1_c;
+  long int i,j, N_t;
+  N_t=N;
   int sep_indicator,cath_indicator;
   ydata = NV_DATA_S(y);
   ypdata = NV_DATA_S(yp);
@@ -553,21 +559,22 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
 
   
   phi1_a = ocp_anode(data_anode->c_s_0,data_anode->c_s_max);
-  phi1_c = ocp_anode(data_cathode->c_s_0,data_cathode->c_s_max);
+  phi1_c = ocp_cathode(data_cathode->c_s_0,data_cathode->c_s_max);
   
   /* Initialize y and yp on all grid points. */ 
   //Future refactoring: Can move all assignments to one block and pass arguments to it
   //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later.
   //Need to force to zero value in the equation as well
-  for(i=0; i<N;i++){
-      j=i/GRID;  
+  for(i=0; i<N_t;i++){
+      j=i/GRID; //temp  
       switch(j){
           case 0:
                  {
                   ydata[i]=c_0;
                   ypdata[i]=ZERO;
                   iddata[i]=ONE;   
-                  constraintdata[i]=ONE;
+                  constraintdata[i]=TWO;
+                  printf("%4.8f\n",constraintdata[i]);
                   break;
                  }
           
@@ -580,7 +587,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
-                  else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
+                  else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
@@ -622,8 +629,9 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
                       constraintdata[i]=ONE;
+                      
                   }
-                  else if(i%GRID>sep_indicator && i%GRID<=cath_indicator){
+                  else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
@@ -633,7 +641,8 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                       ydata[i]=data_cathode->c_s_0;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      constraintdata[i]=ONE;
+                      constraintdata[i]=TWO;
+                      
                   }
  
                   break;
@@ -665,7 +674,7 @@ static void InitAnodeData(Material_Data data_anode)
 
 static void InitSepData(Material_Data data_sep)
 {  
-  data_sep->dx = ONE/(GRID - ONE);
+  data_sep->dx = ONE/(RCONST(GRID) - ONE);
   data_sep->coeff = ONE/(data_sep->dx);
   data_sep->eps = RCONST(0.724);
   data_sep->sigma_eff = (data_sep->sigma)*(ONE-data_sep->eps);
@@ -701,7 +710,7 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   realtype l_a, l_s;
   
   data->dx_a = data_anode->dx;
-  data->coeff = data_anode->coeff;
+  data->coeff_a = data_anode->coeff;
   data->eps_a = data_anode->eps;
   data->sigma_a = data_anode->sigma;
   data->sigma_eff_a = data_anode->sigma_eff;

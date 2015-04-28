@@ -9,7 +9,7 @@
 #include <sundials/sundials_math.h>
 //#include "half_cell_solver.c"
 
-#define GRID        100
+#define GRID        5
 #define N_VAR       5    
 #define N           GRID*N_VAR 
 #define ZERO        RCONST(0.0)
@@ -41,18 +41,20 @@ typedef struct {
 realtype ocp_anode(realtype c,realtype c_max);
 realtype ocp_cathode(realtype c,realtype c_max);
 realtype kappa(realtype c, realtype eps);
+realtype Rsinh(realtype x);
+realtype Rlog(realtype x);
 static void InitAnodeData(Material_Data data_anode);
 
 int main(void){
   realtype b,l_a;
   Material_Data data_anode;
-  b = kappa(RCONST(3109),RCONST(0.385));
+  b = Rlog(I);
   data_anode=NULL;
   data_anode = (Material_Data) malloc(sizeof *data_anode);
   InitAnodeData(data_anode);
   l_a = (data_anode->l)/(data_anode->l + data_anode->radius);
   int i = (int)(l_a*RCONST(GRID));
-  printf("%3.8f\n",l_a*RCONST(GRID));
+  printf("%3.8f\n",b);
   printf("%d\n",i);
   printf("%3.8f\n",data_anode->coeff);
   printf("%3.8f\n",T_PLUS);
@@ -91,6 +93,25 @@ realtype kappa(realtype c, realtype eps)
   
 }
 
+realtype Rlog(realtype x)
+{
+  if (x <= ZERO)
+  {
+    return(ZERO);
+  }
+ 
+ #if defined(SUNDIALS_USE_GENERIC_MATH)
+  return((realtype) log((double) x));
+ #elif defined(SUNDIALS_DOUBLE_PRECISION)
+  return(log(x));
+ #elif defined(SUNDIALS_SINGLE_PRECISION)
+  return(log(x));
+ #elif defined(SUNDIALS_EXTENDED_PRECISION)
+  return(log(x));
+ #endif
+}
+
+
 realtype ocp_anode(realtype c,realtype c_max)
 {
   realtype soc = c/c_max;
@@ -102,6 +123,20 @@ realtype ocp_anode(realtype c,realtype c_max)
            RCONST(37.311)*SUNRpowerI(c,6)-RCONST(73.083)*SUNRpowerI(c,8)+RCONST(95.96)*SUNRpowerI(c,10);
            
   return (numer/denom);
+}
+
+realtype Rsinh(realtype x)
+{
+ 
+ #if defined(SUNDIALS_USE_GENERIC_MATH)
+  return((realtype) sinh((double) x));
+ #elif defined(SUNDIALS_DOUBLE_PRECISION)
+  return(sinh(x));
+ #elif defined(SUNDIALS_SINGLE_PRECISION)
+  return(sinh(x));
+ #elif defined(SUNDIALS_EXTENDED_PRECISION)
+  return(sinh(x));
+ #endif
 }
 
 realtype ocp_cathode(realtype c,realtype c_max)
