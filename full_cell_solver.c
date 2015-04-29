@@ -34,7 +34,7 @@
 
 /* Problem Constants */
 
-#define GRID        100
+#define GRID        500
 #define N_VAR       5    
 #define N           GRID*N_VAR 
 #define ZERO        RCONST(0.0)
@@ -46,6 +46,7 @@
 #define F           RCONST(96487.0)
 #define BRUGG       RCONST(4.0)  //confirm if this is always constant
 #define I           RCONST(2.0)
+#define EPS         RCONST(1.0)
 
 //Problem constants defined in preprocessor in this file. Need to keep all problem constants in a unique location in the next version
 //Might have to refactor to relabel anode & cathode
@@ -120,8 +121,6 @@ static void InitAnodeData(Material_Data data_anode);
 static void InitSepData(Material_Data data_sep);
 static void InitCathodeData(Material_Data data_cathode);
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data);
-realtype ocp_anode(realtype c,realtype c_max);
-realtype ocp_cathode(realtype c,realtype c_max);
 realtype SUNRpowerI(realtype a, int b);
 realtype SUNRpowerR(realtype a, realtype b);
 realtype Rsinh(realtype x);
@@ -223,9 +222,9 @@ int main(void)
 
   /* Set remaining input parameters. */
   t0   = ZERO;
-  t1   = RCONST(0.01);
-  rtol = RCONST(1.0e-3);
-  atol = RCONST(1.0e-3);
+  t1   = RCONST(0.001);
+  rtol = RCONST(1.0e-2);
+  atol = RCONST(1.0e-2);
 
   /* Call IDACreate and IDAMalloc to initialize solution */
   mem = IDACreate();
@@ -265,11 +264,11 @@ int main(void)
  
   /* Call IDACalcIC to correct the initial values. */
   
-  /*/ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
+  ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
   if(check_flag(&ier, "IDACalcIC", 1)){ 
     return(1);
   }
-  */
+  
   /* Print output heading. */
   //PrintHeader(rtol, atol);  
   
@@ -336,18 +335,18 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
   sep_indicator = data->sep_indicator;
   cath_indicator = data->cath_indicator;
   
-  for(i=0; i<N_t;i++){
-     printf("%3.5f\n",ydata[i]);
-  }
+  /*for(i=0; i<N_t;i++){
+     printf("%3.5f\n",yv[i]);
+  }*/
   
-  for(i=0; i<N_t;i++){
+  for(i=0; i<2;i++){
       j=i/GRID;  //temp
       switch(j){
           case 0: //c
                  {
                   if(i%GRID==0){
                       resv[i] = yv[i+1]-yv[i];
-                      //printf("%3.5f\n",resv[i]);
+                      //printf("%3.5f\n",yv[i]);
                   }
                   
                   else if(i%GRID>0 && i%GRID<sep_indicator){
@@ -390,16 +389,16 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                       resv[i] = (data->coeff_a)*(yv[i+1]-yv[i])+I/(data->sigma_eff_a);
                   }
                   //Might need additional BC
-                  else if(i%GRID>0 && i%GRID<=sep_indicator){
+                  else if(i%GRID>0 && i%GRID<sep_indicator){
                       resv[i] = (data->sigma_eff_a)*SUNRpowerI(data->coeff_a,2)*(yv[i+1]+yv[i-1]-TWO*yv[i]) -
                                 (data->interfac_area_a)*F*yv[i+2*GRID];//Check
                       
                   }
-                  /*
+                  
                   else if(i%GRID==sep_indicator){
-                      resv[i] = 
+                      resv[i] = yv[i]-yv[i-1];
                   }
-                  */
+                  
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       resv[i] = yv[i] - ZERO;
                       
@@ -432,7 +431,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   else if(i%GRID>0 && i%GRID<sep_indicator){
                       resv[i] = I+(data->sigma_eff_a)*(data->coeff_a)*(yv[i+1-GRID]-yv[i-GRID])+
                                 kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i])-
-                                TWO*kappa(yv[i-2*GRID],data->eps_a)*R*T*(ONE/F)*(data->coeff_a)*(ONE-T_PLUS)*
+                                TWO*kappa(yv[i-2*GRID],data->eps_a)*(R*T/F)*(data->coeff_a)*(ONE-T_PLUS)*
                                 (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
                                 
                                                                                       
@@ -458,7 +457,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   else if(i%GRID>cath_indicator && i%GRID<GRID-1){
                       resv[i] = I+(data->sigma_eff_c)*(data->coeff_c)*(yv[i+1-GRID]-yv[i-GRID])+
                                 kappa(yv[i-2*GRID],data->eps_c)*(data->coeff_c)*(yv[i+1]-yv[i])-
-                                TWO*kappa(yv[i-2*GRID],data->eps_c)*R*T*(ONE/F)*(data->coeff_c)*(ONE-T_PLUS)*
+                                TWO*kappa(yv[i-2*GRID],data->eps_c)*(R*T/F)*(data->coeff_c)*(ONE-T_PLUS)*
                                 (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
                      
                   }
@@ -571,10 +570,10 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
           case 0:
                  {
                   ydata[i]=c_0;
-                  ypdata[i]=ZERO;
+                  ypdata[i]=EPS;
                   iddata[i]=ONE;   
                   constraintdata[i]=TWO;
-                  printf("%4.8f\n",constraintdata[i]);
+                  //printf("%4.8f\n",constraintdata[i]);
                   break;
                  }
           
@@ -583,19 +582,19 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                   
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
                       ydata[i]=phi1_a;
-                      ypdata[i]=ZERO;
+                      ypdata[i]=EPS;
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
-                      ypdata[i]=ZERO;
+                      ypdata[i]=EPS;
                       iddata[i]=ZERO;   
                       constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=phi1_c;
-                      ypdata[i]=ZERO;
+                      ypdata[i]=EPS;
                       iddata[i]=ZERO;
                       constraintdata[i]=ZERO;
                   }
@@ -606,8 +605,8 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
           
           case 2:
                  {
-                  ydata[i]=ZERO;
-                  ypdata[i]=ZERO;
+                  ydata[i]=EPS;
+                  ypdata[i]=EPS;
                   iddata[i]=ZERO;   
                   constraintdata[i]=ZERO;
                   break;
@@ -615,8 +614,8 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
           
           case 3:
                  {
-                  ydata[i]=ZERO;
-                  ypdata[i]=ZERO;
+                  ydata[i]=EPS;
+                  ypdata[i]=EPS;
                   iddata[i]=ZERO;   
                   constraintdata[i]=ZERO;
                   break;
@@ -626,20 +625,20 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                  {
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
                       ydata[i]=data_anode->c_s_0;
-                      ypdata[i]=ZERO;
+                      ypdata[i]=EPS;
                       iddata[i]=ONE;   
                       constraintdata[i]=ONE;
                       
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
-                      ypdata[i]=ZERO;
+                      ypdata[i]=EPS;
                       iddata[i]=ONE;   
                       constraintdata[i]=ONE;
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=data_cathode->c_s_0;
-                      ypdata[i]=ZERO;
+                      ypdata[i]=EPS;
                       iddata[i]=ONE;   
                       constraintdata[i]=TWO;
                       
