@@ -1,24 +1,21 @@
-/*
- * -----------------------------------------------------------------
+///\file
+ /** -----------------------------------------------------------------
  * $Date: 2015-04-26$
  * -----------------------------------------------------------------
  * Programmer: Pranav Shetty
  *              
  * -----------------------------------------------------------------
- * Example problem towards building a full fledged LiB solver: A half cell solver.
+ * Building a full fledged LiB solver
  *
- * This example solves a set of 5 PDE's to obtain the relevant parameters of a half cell.
- * This version uses the band solver IDABand, and IDACalcIC.
+ * This code solves a set of 5 PDE's to obtain the relevant parameters of a lithium ion cell using a 1D model.
+ * This version uses the Krylov solver IDASpgmr.
  * y & yp denote the set of variables and its derivaive respectively. A generic label y has been chosen in order to remain
- * consistent with ida's documentation and also because the  encompasses 5 different variables
- *
+ * consistent with ida's documentation and also because it encompasses 5 different variables over the entire domain
  *
  * The system is solved with IDA using the banded linear system
  * solver, half-bandwidths equal to 1, and default
  * difference-quotient Jacobian.
- * IDACalcIC is called to compute correct values at the boundary,
- * given incorrect values as input initial guesses. The constraints
- * u >= 0 are posed for some components.
+ * IDACalcIC is called to compute correct values at the boundary, given incorrect values as input initial guesses 
  * -----------------------------------------------------------------
  */
 
@@ -28,49 +25,54 @@
 
 #include <ida/ida.h>
 #include <ida/ida_spgmr.h>
-#include <ida/ida_band.h>
+
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
 #include <sundials/sundials_math.h>
+#include "functions.c"
 
 /* Problem Constants */
 
-#define GRID        500
-#define N_VAR       5    
+#define GRID        50   ///<Number of grid points the domain is split into
+#define N_VAR       5    ///<Number of variables in domain
 #define N           GRID*N_VAR 
 #define ZERO        RCONST(0.0)
 #define ONE         RCONST(1.0)
 #define TWO         RCONST(2.0)
-#define T_PLUS      RCONST(0.363)
-#define R           RCONST(8.314)
-#define T           RCONST(298.15)
-#define F           RCONST(96487.0)
-#define BRUGG       RCONST(4.0)  //confirm if this is always constant
+#define T_PLUS      RCONST(0.363)///<Transport number in anode
+#define R           RCONST(8.314)///<Universal Gas constant
+#define T           RCONST(298.15)///<Temperature
+#define F           RCONST(96487.0)///<Faraday's constant
+#define BRUGG       RCONST(4.0) ///<Bruggman's coefficient. Used to account for effect of porosity in constants
 #define I           RCONST(2.0)
 #define EPS         RCONST(0.01)
 
-//Problem constants defined in preprocessor in this file. Need to keep all problem constants in a unique location in the next version
-//Might have to refactor to relabel anode & cathode
+///Struct defined in order to store material properties in each region of the cell(anode, cathode and separator)
 
-//Look at struct brackets again
+
 typedef struct {
-  realtype dx;
-  realtype coeff;
-  realtype eps;
-  realtype sigma;
-  realtype diff_coeff;
-  realtype radius;
-  realtype k;
-  realtype c_s_max;
-  realtype c_s_0;
-  realtype c_0;
-  realtype l;
-  realtype interfac_area;
-  realtype sigma_eff;
-  realtype diff_coeff_eff;
-  realtype diff_coeff_solid;
+  realtype dx; ///< Defines the spacing between grid points
+  realtype coeff; ///<Takes the value 1/dx
+  realtype eps; ///< Porosity of material. Dimensionless
+  realtype sigma;///< Conductivity. Unit: S/m
+  realtype diff_coeff;///< Diffusion coefficient. Unit: m^2/s
+  realtype radius;///< Average radius of electrode particles: Unit:m
+  realtype k;///<Reaction constant for the Butler Volmer equation
+  realtype c_s_max;///<Maximum lithium intercalation capacity of the electrode. Unit: mol/m^3
+  realtype c_s_0;///<Initial concentration of lithium in the solid phase. Unit: mol/m^3
+  realtype c_0;///<Initial concentration of lithium in the electrolyte. Unit: mol/m^3
+  realtype l;///<Dimension of the electrode region. Unit: m
+  realtype interfac_area;///< Interfacial area of electrode particles. Unit: m^2/m^3
+  realtype sigma_eff; ///<Effective conductivity taking into account porosity of medium. Unit: S/m
+  realtype diff_coeff_eff; ///<Effective diffusion coefficient taking into account porosity of medium. Unit: m^2/s
+  realtype diff_coeff_solid;///<Diffusion coefficient of lithium intercalation in the electrode
 } *Material_Data;
 
+///This struct transfers the material data from each of the threee electrode Material data blocks into a single data block which can then be passed to IDA
+/**Each variable used in Cell_Data is an analogue of a variable used in Material_Data with a suffix to indicate which region 
+   it came from
+   
+*/
 typedef struct {
   realtype dx_a;
   realtype coeff_a;
@@ -112,32 +114,29 @@ typedef struct {
   realtype sigma_eff_c;
   realtype diff_coeff_eff_c;
   
-  int sep_indicator, cath_indicator;
+  int sep_indicator;///< Gives an integer value on the grid between anode and separator
+  int cath_indicator;///< Gives an integer value on the grid between cathode and separator
 } *Cell_Data;
 
-/* Prototypes of functions called by IDA */
-
-int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, void *user_data);
 static void InitAnodeData(Material_Data data_anode);
 static void InitSepData(Material_Data data_sep);
 static void InitCathodeData(Material_Data data_cathode);
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data);
-realtype SUNRpowerI(realtype a, int b);
-realtype SUNRpowerR(realtype a, realtype b);
+realtype kappa(realtype c, realtype eps);
+realtype ocp_anode(realtype c_surf, realtype c_max);
+realtype ocp_cathode(realtype c_surf, realtype c_max);
+
 realtype Rsinh(realtype x);
 realtype Rlog(realtype x); 
 
 /* Prototypes of private functions */
 
-//static void PrintHeader(realtype rtol, realtype atol);
-//static void PrintOutput(void *mem, realtype t, N_Vector u);
-static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode, N_Vector y,
+void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode, N_Vector y,
                               N_Vector yp, N_Vector id, N_Vector constraints);
-
+                              int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, 
+                              void*user_data);
+int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, void *user_data);
 static int check_flag(void *flagvalue, char *funcname, int opt);
-realtype kappa(realtype c, realtype eps);
-realtype ocp_anode(realtype c_surf, realtype c_max);
-realtype ocp_cathode(realtype c_surf, realtype c_max);
 
 /*
  *--------------------------------------------------------------------
@@ -151,8 +150,8 @@ int main(void)
   Material_Data data_anode,data_cathode,data_sep;
   Cell_Data data;
   N_Vector y, yp, constraints, id, res;
-  int ier, iout, i;
-  long int mu, ml;
+  int ier, iout;
+  long int mu, ml,i;
   realtype rtol, atol, t0, t1, tout, tret;
   mem = NULL;
   data_anode = data_cathode = data_sep = NULL;
@@ -160,24 +159,24 @@ int main(void)
   y = yp = constraints = id = res = NULL;
   
   data_anode = (Material_Data) malloc(sizeof *data_anode);
-  /*if(check_flag((void *)data_anode, "malloc", 2)){
+  if(check_flag((void *)data_anode, "malloc", 2)){
     return(1);
-  }*/
+  }
   
   data_sep = (Material_Data) malloc(sizeof *data_sep);
-  /*if(check_flag((void *)data_sep, "malloc", 2)){
+  if(check_flag((void *)data_sep, "malloc", 2)){
     return(1);
-  }*/
+  }
   
   data_cathode = (Material_Data) malloc(sizeof *data_cathode);
-  /*if(check_flag((void *)data_cathode, "malloc", 2)){
+  if(check_flag((void *)data_cathode, "malloc", 2)){
     return(1);
-  }*/
+  }
   
   data = (Cell_Data) malloc(sizeof *data);
-  /*if(check_flag((void *)data, "malloc", 2)){
+  if(check_flag((void *)data, "malloc", 2)){
     return(1);
-  }*/
+  }
     
   InitAnodeData(data_anode);
   InitSepData(data_sep);
@@ -214,18 +213,15 @@ int main(void)
   
 /* Create and load problem data block. */ 
     
-  //Need to initialize remaining constants by hardcoding them here. Need to take value from cffi in later iteration  
-  //Do it in a separate function
-  //Need to deal with units of all constants
-
+  
   /* Initialize y, yp, id. */
   SetInitialProfile(data_anode,data_sep,data_cathode, y, yp, id, constraints);
 
   /* Set remaining input parameters. */
   t0   = ZERO;
-  t1   = RCONST(0.1);
-  rtol = RCONST(1.0e-2);
-  atol = RCONST(1.0e-2);
+  t1   = RCONST(0.001);
+  rtol = RCONST(1.0e-3);
+  atol = RCONST(1.0e-3);
 
   /* Call IDACreate and IDAMalloc to initialize solution */
   mem = IDACreate();
@@ -242,12 +238,12 @@ int main(void)
   if(check_flag(&ier, "IDASetId", 1)){ 
     return(1);
   }
-
+  /*
   ier = IDASetConstraints(mem, constraints);
   if(check_flag(&ier, "IDASetConstraints", 1)){
     return(1);
   }
-
+  */
   ier = IDAInit(mem, half_cell_residuals, t0, y, yp);
   if(check_flag(&ier, "IDAInit", 1)){
     return(1);
@@ -260,47 +256,43 @@ int main(void)
   
   /* Call IDABand to specify the linear solver. */
   //mu = 1; ml = 1; 
-  ier = IDASpgmr(mem,0);
+  
+  ier = IDASpgmr(mem, 0);
+  if(check_flag(&ier, "IDASpgmr", 1)) return(1);
+  
+  /*
+  ier = IDABand(mem, N, mu,ml);
   if(check_flag(&ier, "IDABand", 1)) return(1);
- 
+  */
+  /*
+  ier = IDADense(mem, N);
+  if(check_flag(&ier, "IDADense", 1)) return(1);
+  */
   /* Call IDACalcIC to correct the initial values. */
   
   ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
   if(check_flag(&ier, "IDACalcIC", 1)){ 
     return(1);
   }
-  
-  /* Print output heading. */
-  //PrintHeader(rtol, atol);  
-  
-  //PrintOutput(mem, t0, uu); //Change
-
 
   /* Loop over output times, call IDASolve, and print results. */
+  realtype *yv;
+  yv = NV_DATA_S(y);
   
-  //for (tout = t1, iout = 1; iout <= 10; iout++, tout *= RCONST(2.0)) {
-    tout=t1;
+  for (tout = t1, iout = 1; iout <= 10; iout++, tout *= RCONST(2.0)) {
+    
     ier = IDASolve(mem, tout, &tret, y, yp, IDA_NORMAL);
     if(check_flag(&ier, "IDASolve", 1)){
       return(1);
     }
-    realtype *yv;
-    yv = NV_DATA_S(y);
-    for(i=0; i<GRID;i++){
-      printf("%3.2f",yv[i]);
-    } 
     
-    //PrintOutput(mem, tret, y);
-  
   }
   
-  /* Print remaining counters and free memory. 
-  ier = IDAGetNumErrTestFails(mem, &netf);
-  check_flag(&ier, "IDAGetNumErrTestFails", 1);
-  ier = IDAGetNumNonlinSolvConvFails(mem, &ncfn);
-  check_flag(&ier, "IDAGetNumNonlinSolvConvFails", 1);
-  printf("\n netf = %ld,   ncfn = %ld \n", netf, ncfn);
-  */
+  for(i=0;i<4*GRID;i++){
+      printf("%3.4f\n",yv[i]);
+    }
+  
+ 
   
   IDAFree(&mem);
   N_VDestroy_Serial(y);
@@ -314,7 +306,6 @@ int main(void)
   free(data);
   
   return(0);
-  
 }
 
 /*
@@ -323,9 +314,16 @@ int main(void)
  *--------------------------------------------------------------------
  */
 
-/*
- * half_cell_residuals: Lithium ion battery system residual function                       
- * 
+/// Lithium ion battery system residual function. This defines the governing PDE equations for this system
+ /** The vector y is split into 5 regions, each region representing one of the variables used in the equation \n
+ y[0-(GRID-1)]   .......concentration \n
+ y[GRID-2*GRID-1]....... ph1 \n
+ y[2*GRID-3*GRID-1].....  phi2\n
+ y[3*GRID- 4*GRID-1]...... j \n
+ y[4*GRID-5*GRID-1]  .....c_s\n
+ While looping over y we define equations in each of the 3 regions along with boundary conditions at the boundary of each
+ of the three regions
+ This function is called by IDA every time it has to solve at a given time t
  */
 
 int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval, 
@@ -339,28 +337,25 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
   ypv = NV_DATA_S(yp); 
   resv = NV_DATA_S(resval);
   data = (Cell_Data)user_data;
-  N_t = N;//temp
+  N_t = N;
   sep_indicator = data->sep_indicator;
   cath_indicator = data->cath_indicator;
   
-  /*for(i=0; i<N_t;i++){
-     printf("%3.5f\n",yv[i]);
-  }*/
   
   for(i=0; i<2;i++){
-      j=i/GRID;  //temp
+      j=i/GRID;  
       switch(j){
           case 0: //c
                  {
                   if(i%GRID==0){
                       resv[i] = yv[i+1]-yv[i];
-                      //printf("%3.5f\n",yv[i]);
+                      
                   }
                   
                   else if(i%GRID>0 && i%GRID<sep_indicator){
                       resv[i] = (data->eps_a)*ypv[i]-(data->diff_coeff_eff_a)*SUNRpowerI(data->coeff_a,2)*
-                                (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_a)*(ONE-T_PLUS)*yv[i+3*GRID];//check here
-                      //printf("%3.5f\n",resv[i]);
+                                (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_a)*(ONE-T_PLUS)*yv[i+3*GRID];
+                      
                   }
                   
                   else if(i%GRID==sep_indicator){
@@ -379,7 +374,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   
                   else if(i%GRID>cath_indicator && i%GRID<GRID-1){
                       resv[i] = (data->eps_c)*ypv[i]-(data->diff_coeff_eff_c)*SUNRpowerI(data->coeff_c,2)*
-                                (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_c)*(ONE-T_PLUS)*yv[i+3*GRID];;
+                                (yv[i+1]+yv[i-1]-TWO*yv[i])-(data->interfac_area_c)*(ONE-T_PLUS)*yv[i+3*GRID];
                      
                   }
                   
@@ -396,10 +391,10 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   if(i%GRID==0){
                       resv[i] = (data->coeff_a)*(yv[i+1]-yv[i])+I/(data->sigma_eff_a);
                   }
-                  //Might need additional BC
+                 
                   else if(i%GRID>0 && i%GRID<sep_indicator){
                       resv[i] = (data->sigma_eff_a)*SUNRpowerI(data->coeff_a,2)*(yv[i+1]+yv[i-1]-TWO*yv[i]) -
-                                (data->interfac_area_a)*F*yv[i+2*GRID];//Check
+                                (data->interfac_area_a)*F*yv[i+2*GRID];
                       
                   }
                   
@@ -413,12 +408,12 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   }
                   
                   else if(i%GRID==cath_indicator){
-                      resv[i] = yv[i]-yv[i-1]; //Might use forward euler here
+                      resv[i] = yv[i]-yv[i-1]; 
                   }
                   
                   else if(i%GRID>cath_indicator && i%GRID<GRID-1){
                       resv[i] = (data->sigma_eff_c)*SUNRpowerI(data->coeff_c,2)*(yv[i+1]+yv[i-1]-TWO*yv[i])-
-                                (data->interfac_area_c)*F*yv[i+2*GRID];//Check
+                                (data->interfac_area_c)*F*yv[i+2*GRID];
                      
                   }
                   
@@ -437,10 +432,10 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   }
                   
                   else if(i%GRID>0 && i%GRID<sep_indicator){
-                      resv[i] = I+(data->sigma_eff_a)*(data->coeff_a)*(yv[i+1-GRID]-yv[i-GRID])+
-                                kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i])-
+                      resv[i] = RCONST(0.5)*I+(data->sigma_eff_a)*(data->coeff_a)*(yv[i+1-GRID]-yv[i-1-GRID])+
+                                kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i-1])-
                                 TWO*kappa(yv[i-2*GRID],data->eps_a)*(R*T/F)*(data->coeff_a)*(ONE-T_PLUS)*
-                                (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
+                                ((yv[i+1-2*GRID])-(yv[i-1-2*GRID]))/(yv[i-1-2*GRID]);
                                 
                                                                                       
                   }
@@ -453,7 +448,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       resv[i] = I+kappa(yv[i-2*GRID],data->eps_a)*(data->coeff_a)*(yv[i+1]-yv[i])-
                                 TWO*kappa(yv[i-2*GRID],data->eps_a)*(R*T/F)*(data->coeff_a)*(ONE-T_PLUS)*
-                                (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
+                                ((yv[i+1-2*GRID])-(yv[i-2*GRID]))/(yv[i-2*GRID]);
                       
                   }
                   
@@ -466,7 +461,7 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
                       resv[i] = I+(data->sigma_eff_c)*(data->coeff_c)*(yv[i+1-GRID]-yv[i-GRID])+
                                 kappa(yv[i-2*GRID],data->eps_c)*(data->coeff_c)*(yv[i+1]-yv[i])-
                                 TWO*kappa(yv[i-2*GRID],data->eps_c)*(R*T/F)*(data->coeff_c)*(ONE-T_PLUS)*
-                                (Rlog(yv[i+1-2*GRID])-Rlog(yv[i-2*GRID]));
+                                ((yv[i+1-2*GRID])-(yv[i-2*GRID]))/(yv[i-2*GRID]);
                      
                   }
                   
@@ -535,16 +530,21 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
  *--------------------------------------------------------------------
  */
 
-/*
- * SetInitialProfile: routine to initialize y, yp,constraints and id vectors       
+
+ ///Function to initialize y, yp,constraints and id vectors       
+ 
+ /** The vector y is split into 5 regions, each region representing one of the variables used in the equation \n
+ y[0-(GRID-1)]   .......concentration.Set to 1000 mol/m^3 \n 
+ y[GRID-2*GRID-1]....... ph1. Set to corresponding values of ocp_anode & cathode \n
+ y[2*GRID-3*GRID-1].....  phi2. Set to 0\n
+ y[3*GRID- 4*GRID-1]...... j. Set to 0 \n
+ y[4*GRID-5*GRID-1]  .....c_s. Set to initial values defined by user\n
+ While looping over y we define equations in each of the 3 regions along with boundary conditions at the boundary of each
+ of the three regions
+ This function is called in int main once to set up the values of y and yp before IDA can operate on it
  */
-/*y[0-(GRID-1)]       concentration
- *y[GRID-2*GRID-1]    ph1
- *y[2*GRID-3*GRID-1]  phi2
- *y[3*GRID- 4*GRID-1] j
- *y[4*GRID-5*GRID-1]  c_s
- */
-static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,
+ 
+void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,
                              N_Vector y, N_Vector yp,
                              N_Vector id, N_Vector constraints)
 {
@@ -570,7 +570,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
   
   /* Initialize y and yp on all grid points. */ 
   //Future refactoring: Can move all assignments to one block and pass arguments to it
-  //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later.
+  //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later
   //Need to force to zero value in the equation as well
   for(i=0; i<N_t;i++){
       j=i/GRID; //temp  
@@ -578,10 +578,10 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
           case 0:
                  {
                   ydata[i]=c_0;
-                  ypdata[i]=EPS;
+                  ypdata[i]=ZERO;
                   iddata[i]=ONE;   
-                  constraintdata[i]=TWO;
-                  //printf("%4.8f\n",constraintdata[i]);
+                  //constraintdata[i]=TWO;
+                  
                   break;
                  }
           
@@ -590,21 +590,21 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                   
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
                       ydata[i]=phi1_a;
-                      ypdata[i]=EPS;
+                      ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
-                      constraintdata[i]=ZERO;
+                      //constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
-                      ypdata[i]=EPS;
+                      ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
-                      constraintdata[i]=ZERO;
+                      //constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=phi1_c;
-                      ypdata[i]=EPS;
+                      ypdata[i]=ZERO;
                       iddata[i]=ZERO;
-                      constraintdata[i]=ZERO;
+                      //constraintdata[i]=ZERO;
                   }
                   
 
@@ -613,19 +613,19 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
           
           case 2:
                  {
-                  ydata[i]=EPS;
-                  ypdata[i]=EPS;
+                  ydata[i]=ZERO;
+                  ypdata[i]=ZERO;
                   iddata[i]=ZERO;   
-                  constraintdata[i]=ZERO;
+                  //constraintdata[i]=ZERO;
                   break;
                  }
           
           case 3:
                  {
-                  ydata[i]=EPS;
-                  ypdata[i]=EPS;
-                  iddata[i]=ZERO;   
-                  constraintdata[i]=ZERO;
+                  ydata[i]=ZERO;
+                  ypdata[i]=ZERO;
+                  iddata[i]=ZERO;  
+                  //constraintdata[i]=ZERO;
                   break;
                  }  
            
@@ -633,22 +633,22 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
                  {
                   if(i%GRID>=0 && i%GRID<=sep_indicator){
                       ydata[i]=data_anode->c_s_0;
-                      ypdata[i]=EPS;
+                      ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      constraintdata[i]=ONE;
+                      //constraintdata[i]=ONE;
                       
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
-                      ypdata[i]=EPS;
+                      ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      constraintdata[i]=ONE;
+                      //constraintdata[i]=ONE;
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=data_cathode->c_s_0;
-                      ypdata[i]=EPS;
+                      ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      constraintdata[i]=TWO;
+                      //constraintdata[i]=TWO;
                       
                   }
  
@@ -659,7 +659,7 @@ static void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Ma
   
   }
 }    
-
+///Initializes user supplied data into data_anode struct
 static void InitAnodeData(Material_Data data_anode)
 {  
   data_anode->dx = ONE/(RCONST(GRID) - ONE);
@@ -679,6 +679,7 @@ static void InitAnodeData(Material_Data data_anode)
   data_anode->interfac_area = RCONST(3.0)*(1-data_anode->eps)/(data_anode->radius);
 }
 
+///Initializes user supplied data into data_sep struct
 static void InitSepData(Material_Data data_sep)
 {  
   data_sep->dx = ONE/(RCONST(GRID) - ONE);
@@ -692,7 +693,7 @@ static void InitSepData(Material_Data data_sep)
   data_sep->l = RCONST(25.0e-6);
 }
 
-
+///Initializes user supplied data into data_cathode struct
 static void InitCathodeData(Material_Data data_cathode)
 {  
   data_cathode->dx = ONE/(RCONST(GRID) - ONE);
@@ -712,6 +713,7 @@ static void InitCathodeData(Material_Data data_cathode)
   data_cathode->interfac_area = RCONST(3.0)*(ONE-data_cathode->eps)/(data_cathode->radius);
 }
 
+///Initializes data from the 3 Material_data structs into struct of Cell_Data
 static void InitCellData(Material_Data data_anode,Material_Data data_sep,Material_Data data_cathode,Cell_Data data)
 {
   realtype l_a, l_s;
@@ -763,165 +765,9 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
   data->cath_indicator = (int)(l_s*GRID);
 }
 
-realtype kappa(realtype c, realtype eps)
-{
-    realtype exp_term, polynom_term;
-    exp_term = SUNRpowerR(eps,BRUGG);
-    polynom_term = RCONST(4.1253e-2)+RCONST(5.007e-4)*c-RCONST(4.7212e-7)*SUNRpowerI(c,2)+
-                   RCONST(1.5094)*SUNRpowerI(c,3)-RCONST(1.6018)*SUNRpowerI(c,4);
-    
-    return polynom_term*exp_term;
-  
-}
+///Returns the electrolyte conductivity at a particular point as a function of electrolyte concentration and the porosity of the medium
 
-realtype ocp_anode(realtype c,realtype c_max)
-{
-  realtype soc = c/c_max;
-  realtype numer,denom;
-  numer = -RCONST(4.656)+RCONST(88.669)*SUNRpowerI(soc,2)-RCONST(401.119)*SUNRpowerI(soc,4)+
-           RCONST(342.909)*SUNRpowerI(c,6)-RCONST(462.471)*SUNRpowerI(c,8)+RCONST(433.434)*SUNRpowerI(c,10);
-  
-  denom = -RCONST(1.0)+RCONST(18.933)*SUNRpowerI(soc,2)-RCONST(79.532)*SUNRpowerI(soc,4)+
-           RCONST(37.311)*SUNRpowerI(c,6)-RCONST(73.083)*SUNRpowerI(c,8)+RCONST(95.96)*SUNRpowerI(c,10);
-           
-  return (numer/denom);
-}
-
-realtype ocp_cathode(realtype c,realtype c_max)
-{
-  realtype soc = c/c_max;
-  realtype expr;
-  expr = RCONST(0.7222)+RCONST(0.1387)*soc+RCONST(0.029)*SUNRpowerR(soc,RCONST(0.5))-
-         RCONST(0.0172)/soc+RCONST(0.0019)*SUNRpowerR(soc,RCONST(-1.5))+
-         RCONST(0.2808)*SUNRpowerR(RCONST(10.0),RCONST(0.90)-RCONST(15.0)*soc)-
-         RCONST(0.7984)*SUNRpowerR(RCONST(10.0),-RCONST(0.4108)+RCONST(0.4465)*soc);
-  return expr;
-}
-
-realtype Rlog(realtype x)
-{
-  if (x <= ZERO)
-  {
-    return(ZERO);
-  }
  
- #if defined(SUNDIALS_USE_GENERIC_MATH)
-  return((realtype) log((double) x));
- #elif defined(SUNDIALS_DOUBLE_PRECISION)
-  return(log(x));
- #elif defined(SUNDIALS_SINGLE_PRECISION)
-  return(log(x));
- #elif defined(SUNDIALS_EXTENDED_PRECISION)
-  return(log(x));
- #endif
-}
-
-realtype Rsinh(realtype x)
-{
- 
- #if defined(SUNDIALS_USE_GENERIC_MATH)
-  return((realtype) sinh((double) x));
- #elif defined(SUNDIALS_DOUBLE_PRECISION)
-  return(sinh(x));
- #elif defined(SUNDIALS_SINGLE_PRECISION)
-  return(sinh(x));
- #elif defined(SUNDIALS_EXTENDED_PRECISION)
-  return(sinh(x));
- #endif
-}
-
-
-/* May not be required
-realtype FLOOR(realtype x)
-{
-  #if defined(SUNDIALS_USE_GENERIC_MATH)
-  return(floor((double) x));
-  #elif defined(SUNDIALS_DOUBLE_PRECISION)
-  return((floor(x));
-  #elif defined(SUNDIALS_SINGLE_PRECISION)
-  return(floor(x));
-  #elif defined(SUNDIALS_EXTENDED_PRECISION)
-  return(floor(x));
-  #endif
-
-*/
-/* 
- * Print first lines of output (problem description)
- 
-
-static void PrintHeader(realtype rtol, realtype atol)
-{
-  printf("\nidaHeat1D_bnd: Heat equation, serial example problem for IDA\n");
-  printf("          Discretized heat equation on 2D unit square.\n");
-  printf("          Zero boundary conditions,");
-  printf(" polynomial initial conditions.\n");
-  printf("          Mesh dimensions: %d", MGRID);
-  printf("        Total system size: %d\n\n", NEQ);
-#if defined(SUNDIALS_EXTENDED_PRECISION) 
-  printf("Tolerance parameters:  rtol = %Lg   atol = %Lg\n", rtol, atol);
-#elif defined(SUNDIALS_DOUBLE_PRECISION) 
-  printf("Tolerance parameters:  rtol = %g   atol = %g\n", rtol, atol);
-#else
-  printf("Tolerance parameters:  rtol = %g   atol = %g\n", rtol, atol);
-#endif
-  printf("Constraints set to force all solution components >= 0. \n");
-  printf("Linear solver: IDABAND, banded direct solver \n");
-  printf("       difference quotient Jacobian, half-bandwidths = %d \n",MGRID);
-#if defined(SUNDIALS_EXTENDED_PRECISION)
-  printf("IDACalcIC called with input boundary values = %Lg \n",BVAL);
-#elif defined(SUNDIALS_DOUBLE_PRECISION)
-  printf("IDACalcIC called with input boundary values = %g \n",BVAL);
-#else
-  printf("IDACalcIC called with input boundary values = %g \n",BVAL);
-#endif
-  // Print output table heading and initial line of table. 
-  printf("\n   Output Summary (umax = max-norm of solution) \n\n");
-  printf("  time       umax     k  nst  nni  nje   nre   nreLS    h      \n" );
-  printf(" .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . \n");
-}
-*/
-/*
- * Print Output
- */
-/*
-static void PrintOutput(void *mem, realtype t, N_Vector uu)
-{
-  int ier;
-  realtype umax, hused;
-  long int nst, nni, nje, nre, nreLS;
-  int kused;
-
-  umax = N_VMaxNorm(uu);
-  
-  ier = IDAGetLastOrder(mem, &kused);
-  check_flag(&ier, "IDAGetLastOrder", 1);
-  ier = IDAGetNumSteps(mem, &nst);
-  check_flag(&ier, "IDAGetNumSteps", 1);
-  ier = IDAGetNumNonlinSolvIters(mem, &nni);
-  check_flag(&ier, "IDAGetNumNonlinSolvIters", 1);
-  ier = IDAGetNumResEvals(mem, &nre);
-  check_flag(&ier, "IDAGetNumResEvals", 1);
-  ier = IDAGetLastStep(mem, &hused);
-  check_flag(&ier, "IDAGetLastStep", 1);
-  ier = IDADlsGetNumJacEvals(mem, &nje);
-  check_flag(&ier, "IDADlsGetNumJacEvals", 1);
-  ier = IDADlsGetNumResEvals(mem, &nreLS);
-  check_flag(&ier, "IDADlsGetNumResEvals", 1);
-
-#if defined(SUNDIALS_EXTENDED_PRECISION) 
-  printf(" %5.2Lf %13.5Le  %d  %3ld  %3ld  %3ld  %4ld  %4ld  %9.2Le \n",
-         t, umax, kused, nst, nni, nje, nre, nreLS, hused);
-#elif defined(SUNDIALS_DOUBLE_PRECISION) 
-  printf(" %5.2f %13.5e  %d  %3ld  %3ld  %3ld  %4ld  %4ld  %9.2e \n",
-         t, umax, kused, nst, nni, nje, nre, nreLS, hused);
-#else
-  printf(" %5.2f %13.5e  %d  %3ld  %3ld  %3ld  %4ld  %4ld  %9.2e \n",
-         t, umax, kused, nst, nni, nje, nre, nreLS, hused);
-#endif
-
-}
-
- */
 /* 
  * Check function return value...
  *   opt == 0 means SUNDIALS function allocates memory so check if
