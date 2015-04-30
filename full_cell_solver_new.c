@@ -238,12 +238,12 @@ int main(void)
   if(check_flag(&ier, "IDASetId", 1)){ 
     return(1);
   }
-  /*
+  
   ier = IDASetConstraints(mem, constraints);
   if(check_flag(&ier, "IDASetConstraints", 1)){
     return(1);
   }
-  */
+  
   ier = IDAInit(mem, half_cell_residuals, t0, y, yp);
   if(check_flag(&ier, "IDAInit", 1)){
     return(1);
@@ -268,6 +268,7 @@ int main(void)
   ier = IDADense(mem, N);
   if(check_flag(&ier, "IDADense", 1)) return(1);
   */
+  
   /* Call IDACalcIC to correct the initial values. */
   
   ier = IDACalcIC(mem, IDA_YA_YDP_INIT, t1);
@@ -569,18 +570,16 @@ void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_
   phi1_c = ocp_cathode(data_cathode->c_s_0,data_cathode->c_s_max);
   
   /* Initialize y and yp on all grid points. */ 
-  //Future refactoring: Can move all assignments to one block and pass arguments to it
-  //j, c_s and phi1 one not used in separator. Initialized to zero for now. May cause issues later
-  //Need to force to zero value in the equation as well
+  
   for(i=0; i<N_t;i++){
-      j=i/GRID; //temp  
+      j=i/GRID;  
       switch(j){
           case 0:
                  {
                   ydata[i]=c_0;
                   ypdata[i]=ZERO;
                   iddata[i]=ONE;   
-                  //constraintdata[i]=TWO;
+                  constraintdata[i]=TWO;
                   
                   break;
                  }
@@ -592,19 +591,19 @@ void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_
                       ydata[i]=phi1_a;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
-                      //constraintdata[i]=ZERO;
+                      constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;   
-                      //constraintdata[i]=ZERO;
+                      constraintdata[i]=ZERO;
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=phi1_c;
                       ypdata[i]=ZERO;
                       iddata[i]=ZERO;
-                      //constraintdata[i]=ZERO;
+                      constraintdata[i]=ZERO;
                   }
                   
 
@@ -616,7 +615,7 @@ void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_
                   ydata[i]=ZERO;
                   ypdata[i]=ZERO;
                   iddata[i]=ZERO;   
-                  //constraintdata[i]=ZERO;
+                  constraintdata[i]=ZERO;
                   break;
                  }
           
@@ -625,7 +624,7 @@ void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_
                   ydata[i]=ZERO;
                   ypdata[i]=ZERO;
                   iddata[i]=ZERO;  
-                  //constraintdata[i]=ZERO;
+                  constraintdata[i]=ZERO;
                   break;
                  }  
            
@@ -635,20 +634,20 @@ void SetInitialProfile(Material_Data data_anode,Material_Data data_sep,Material_
                       ydata[i]=data_anode->c_s_0;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      //constraintdata[i]=ONE;
+                      constraintdata[i]=ONE;
                       
                   }
                   else if(i%GRID>sep_indicator && i%GRID<cath_indicator){
                       ydata[i]=ZERO;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      //constraintdata[i]=ONE;
+                      constraintdata[i]=ONE;
                   }
                   else if(i%GRID>cath_indicator && i%GRID<=GRID-1){
                       ydata[i]=data_cathode->c_s_0;
                       ypdata[i]=ZERO;
                       iddata[i]=ONE;   
-                      //constraintdata[i]=TWO;
+                      constraintdata[i]=TWO;
                       
                   }
  
@@ -767,8 +766,8 @@ static void InitCellData(Material_Data data_anode,Material_Data data_sep,Materia
 
 ///Returns the electrolyte conductivity at a particular point as a function of electrolyte concentration and the porosity of the medium
 
- 
-/* 
+///Checks if memory is successfully allocated and if not it returns the appropriate error code 
+/** 
  * Check function return value...
  *   opt == 0 means SUNDIALS function allocates memory so check if
  *            returned NULL pointer
