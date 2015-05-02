@@ -1,3 +1,4 @@
+///This file serves as a test file from which spiking of the main code can take place
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>

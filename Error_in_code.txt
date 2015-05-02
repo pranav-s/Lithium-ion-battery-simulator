@@ -1,0 +1,6 @@
+This file describes the error in the current code which prevents the code from giving an output. We are reasonably sure that this is the major error preventing the code from running as we have run static code analyzers(splint) on the code.
+
+The project aims to solve a system of partial differential equations which have been discretized to obtain a set of algebraic equations.
+On discretization however, the initial conditions which were true for the continous case are no longer true for the discrete case and must be solved for explicitly to obtain the exact initial conditions.
+IDACalcIC is a powerful function within IDA which it was hoped would do this. However, IDACalcIC is unable to produce an output in a reasonable amount of time for the initial conditions, which suggests that we will have to turn to some other solvers and solve our system of equations.
+If exact initial conditions are not provided, the error blows up while integrating and leads to convergence failure which is what we observe in the code.
