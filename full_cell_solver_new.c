@@ -151,7 +151,7 @@ int main(void)
   Cell_Data data;
   N_Vector y, yp, constraints, id, res;
   int ier, iout;
-  long int mu, ml,i;
+  long int i;
   realtype rtol, atol, t0, t1, tout, tret;
   mem = NULL;
   data_anode = data_cathode = data_sep = NULL;
@@ -277,8 +277,7 @@ int main(void)
   }
 
   /* Loop over output times, call IDASolve, and print results. */
-  realtype *yv;
-  yv = NV_DATA_S(y);
+  
   
   for (tout = t1, iout = 1; iout <= 10; iout++, tout *= RCONST(2.0)) {
     
@@ -289,11 +288,12 @@ int main(void)
     
   }
   
+  realtype *yv;
+  yv = NV_DATA_S(y);
+  
   for(i=0;i<4*GRID;i++){
       printf("%3.4f\n",yv[i]);
     }
-  
- 
   
   IDAFree(&mem);
   N_VDestroy_Serial(y);
@@ -524,12 +524,6 @@ int half_cell_residuals(realtype tres, N_Vector y, N_Vector yp, N_Vector resval,
   return(0);
 
 }
-
-/*
- *--------------------------------------------------------------------
- * PRIVATE FUNCTIONS
- *--------------------------------------------------------------------
- */
 
 
  ///Function to initialize y, yp,constraints and id vectors       
